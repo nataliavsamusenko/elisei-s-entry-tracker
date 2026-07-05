@@ -1,20 +1,33 @@
-// Data adapter layer. Позже можно заменить getApplications() на fetch() к Google Apps Script.
-
 export type Basis = "Бюджет" | "Платное";
-export type Status = "На рассмотрении" | "Участвуете в конкурсе";
+export type Status = string;
+
+export interface AdmissionControlData {
+  seats: number | null;
+  semesterFeeText: string | null;
+  contractsCount: number | null;
+  contractsAbove: number | null;
+  consentsCount: number | null;
+  consentsAbove: number | null;
+  contractRank: number | null;
+  consentRank: number | null;
+  sourceNote: string;
+}
 
 export interface Application {
-  id: number;
+  id: string;
   university: string;
   basis: Basis;
   group: string;
   priority: number;
   score: number;
-  scoreBreakdown: string; // "70/60/61 + 1 ИД"
+  scoreBreakdown: string;
   position: number;
   status: Status;
-  consent: string; // "согласие —" / "договор —"
+  consent: string;
   snapshot: string;
+  control: AdmissionControlData;
+  generalChange: string;
+  activeChange: string;
 }
 
 export interface CoverageEntry {
@@ -36,75 +49,126 @@ export interface DashboardMeta {
   stage: string;
 }
 
-const DEMO_APPLICATIONS: Application[] = [
-  { id: 1, university: "УрФУ", basis: "Бюджет", group: "Международный и корпоративный менеджмент", priority: 1, score: 192, scoreBreakdown: "70/60/61 + 1 ИД", position: 533, status: "На рассмотрении", consent: "согласие —", snapshot: "03.07.2026 12:11" },
-  { id: 2, university: "УрФУ", basis: "Бюджет", group: "Мировая экономика и международный бизнес", priority: 4, score: 192, scoreBreakdown: "70/60/61 + 1 ИД", position: 467, status: "На рассмотрении", consent: "согласие —", snapshot: "03.07.2026 12:20" },
-  { id: 3, university: "УрФУ", basis: "Платное", group: "Мировая экономика и международный бизнес", priority: 3, score: 192, scoreBreakdown: "70/60/61 + 1 ИД", position: 271, status: "На рассмотрении", consent: "договор —", snapshot: "03.07.2026 12:18" },
-  { id: 4, university: "УрФУ", basis: "Платное", group: "Управление персоналом", priority: 6, score: 192, scoreBreakdown: "70/60/61 + 1 ИД", position: 115, status: "На рассмотрении", consent: "договор —", snapshot: "03.07.2026 12:16" },
-  { id: 5, university: "СПбГУПТД", basis: "Платное", group: "Экономика предприятий и организаций", priority: 3, score: 191, scoreBreakdown: "70/60/61 + 0 ИД", position: 79, status: "На рассмотрении", consent: "договор —", snapshot: "03.07.2026 12:52" },
-  { id: 6, university: "СПбГУПТД", basis: "Платное", group: "Бизнес-аналитика; Экономика и анализ данных", priority: 4, score: 191, scoreBreakdown: "70/60/61 + 0 ИД", position: 76, status: "Участвуете в конкурсе", consent: "договор —", snapshot: "03.07.2026 12:52" },
-  { id: 7, university: "СПбГУПТД", basis: "Платное", group: "Бухгалтерский учёт, аудит и финансовый консалтинг", priority: 6, score: 191, scoreBreakdown: "70/60/61 + 0 ИД", position: 43, status: "На рассмотрении", consent: "договор —", snapshot: "03.07.2026 12:52" },
-  { id: 8, university: "СПбГУПТД", basis: "Платное", group: "Маркетинг", priority: 7, score: 191, scoreBreakdown: "70/60/61 + 0 ИД", position: 83, status: "На рассмотрении", consent: "договор —", snapshot: "03.07.2026 12:52" },
-  { id: 9, university: "СПбГЭУ", basis: "Платное", group: "Группа «Экономика»", priority: 1, score: 194, scoreBreakdown: "70/61/60 + 3 ИД", position: 697, status: "Участвуете в конкурсе", consent: "договор —", snapshot: "03.07.2026 13:11" },
-  { id: 10, university: "СПбГЭУ", basis: "Платное", group: "Группа «Менеджмент»", priority: 2, score: 194, scoreBreakdown: "70/61/60 + 3 ИД", position: 795, status: "Участвуете в конкурсе", consent: "договор —", snapshot: "03.07.2026 13:11" },
-  { id: 11, university: "СПбГЭУ", basis: "Платное", group: "Кадровый менеджмент", priority: 8, score: 194, scoreBreakdown: "70/61/60 + 3 ИД", position: 228, status: "Участвуете в конкурсе", consent: "договор —", snapshot: "03.07.2026 13:11" },
-  { id: 12, university: "СПбГЭУ", basis: "Платное", group: "Экономика предприятия с углублённым изучением китайского языка", priority: 9, score: 194, scoreBreakdown: "70/61/60 + 3 ИД", position: 244, status: "Участвуете в конкурсе", consent: "договор —", snapshot: "03.07.2026 13:11" },
-  { id: 13, university: "СПбПУ", basis: "Бюджет", group: "Торговое дело", priority: 2, score: 191, scoreBreakdown: "70/60/61 + 0 ИД", position: 562, status: "Участвуете в конкурсе", consent: "согласие —", snapshot: "03.07.2026 12:12" },
-  { id: 14, university: "СПбПУ", basis: "Бюджет", group: "Экономика", priority: 3, score: 191, scoreBreakdown: "70/60/61 + 0 ИД", position: 1059, status: "Участвуете в конкурсе", consent: "согласие —", snapshot: "03.07.2026 12:17" },
-  { id: 15, university: "СПбПУ", basis: "Бюджет", group: "Интеллектуальные системы в гуманитарной сфере", priority: 5, score: 191, scoreBreakdown: "70/60/61 + 0 ИД", position: 213, status: "Участвуете в конкурсе", consent: "согласие —", snapshot: "03.07.2026 12:12" },
-  { id: 16, university: "СПбПУ", basis: "Бюджет", group: "Экономика цифрового предприятия", priority: 6, score: 191, scoreBreakdown: "70/60/61 + 0 ИД", position: 287, status: "Участвуете в конкурсе", consent: "согласие —", snapshot: "03.07.2026 12:10" },
-  { id: 17, university: "СПбГМТУ", basis: "Бюджет", group: "Группа «Экономика»", priority: 1, score: 191, scoreBreakdown: "70/60/61 + 0 ИД", position: 298, status: "На рассмотрении", consent: "согласие —", snapshot: "03.07.2026" },
-  { id: 18, university: "СПбГМТУ", basis: "Бюджет", group: "Группа «Менеджмент»", priority: 2, score: 191, scoreBreakdown: "70/60/61 + 0 ИД", position: 270, status: "На рассмотрении", consent: "согласие —", snapshot: "03.07.2026 12:50" },
-  { id: 19, university: "СПбГМТУ", basis: "Платное", group: "Группа «Экономика»", priority: 1, score: 191, scoreBreakdown: "70/60/61 + 0 ИД", position: 147, status: "На рассмотрении", consent: "договор —", snapshot: "03.07.2026" },
-  { id: 20, university: "СПбГМТУ", basis: "Платное", group: "Группа «Менеджмент»", priority: 2, score: 191, scoreBreakdown: "70/60/61 + 0 ИД", position: 135, status: "На рассмотрении", consent: "договор —", snapshot: "03.07.2026 12:51" },
-];
-
-const DEMO_COVERAGE: CoverageEntry[] = [
-  { university: "УрФУ", received: 4, total: 14 },
-  { university: "СПбГЭУ", received: 4, total: 15 },
-  { university: "СПбПУ", received: 4, total: 15 },
-  { university: "СПбГУПТД", received: 4, total: 12 },
-  { university: "СПбГМТУ", received: 4, total: 4 },
-];
-
-const DEMO_META: DashboardMeta = {
-  candidateId: "1431604",
-  candidateName: "Елисей",
-  lastUpdate: "03.07.2026 13:11",
-  totalGroups: 60,
-  budgetTotal: 24,
-  paidTotal: 36,
-  receivedTotal: 20,
-  budgetReceived: 8,
-  paidReceived: 12,
-  stage: "Ранний этап конкурса",
-};
-
-// ---- Adapter API ----
-// В будущем: заменить на fetch(GAS_ENDPOINT) и вернуть {applications, coverage, meta}.
-
 export interface DashboardData {
   meta: DashboardMeta;
   applications: Application[];
   coverage: CoverageEntry[];
 }
 
-export async function getDashboardData(): Promise<DashboardData> {
-  // TODO: заменить на реальный вызов Google Apps Script JSON endpoint.
-  // Пример:
-  // const res = await fetch(import.meta.env.VITE_GAS_ENDPOINT);
-  // return await res.json();
+type ApiNumber = number | null | undefined;
+
+type ApiApplication = {
+  id: string;
+  university: string;
+  basis: string;
+  group: string;
+  priority: ApiNumber;
+  score: ApiNumber;
+  generalPosition: ApiNumber;
+  status?: string;
+  snapshot?: string;
+  consent?: string;
+  contract?: string;
+  seats?: ApiNumber;
+  contractsCount?: ApiNumber;
+  contractsAbove?: ApiNumber;
+  consentsCount?: ApiNumber;
+  consentsAbove?: ApiNumber;
+  contractRank?: ApiNumber;
+  consentRank?: ApiNumber;
+  activeSource?: string;
+  semesterFeeText?: string | null;
+  generalChange?: string;
+  activeChange?: string;
+  hasList?: boolean;
+};
+
+type ApiPayload = {
+  meta: Omit<DashboardMeta, "candidateName">;
+  applications: ApiApplication[];
+  coverage: CoverageEntry[];
+};
+
+function toNumber(value: ApiNumber, field: string, app: ApiApplication): number {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  throw new Error(`В API нет числового поля «${field}» для группы «${app.group}» (${app.id}).`);
+}
+
+function toNullableNumber(value: ApiNumber): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function toBasis(value: string): Basis {
+  if (value === "Бюджет" || value === "Платное") return value;
+  throw new Error(`Неизвестная основа поступления в API: «${value}».`);
+}
+
+function mapApplication(app: ApiApplication): Application {
+  const basis = toBasis(app.basis);
+  const confirmation = basis === "Бюджет"
+    ? `Согласие: ${app.consent || "—"}`
+    : `Договор: ${app.contract || "—"}`;
+
   return {
-    meta: DEMO_META,
-    applications: DEMO_APPLICATIONS,
-    coverage: DEMO_COVERAGE,
+    id: String(app.id),
+    university: app.university,
+    basis,
+    group: app.group,
+    priority: toNumber(app.priority, "Приоритет", app),
+    score: toNumber(app.score, "Балл Елисея", app),
+    scoreBreakdown: "",
+    position: toNumber(app.generalPosition, "Позиция общая", app),
+    status: app.status || "Нет данных",
+    consent: confirmation,
+    snapshot: app.snapshot || "Нет даты списка",
+    control: {
+      seats: toNullableNumber(app.seats),
+      semesterFeeText: app.semesterFeeText ?? null,
+      contractsCount: toNullableNumber(app.contractsCount),
+      contractsAbove: toNullableNumber(app.contractsAbove),
+      consentsCount: toNullableNumber(app.consentsCount),
+      consentsAbove: toNullableNumber(app.consentsAbove),
+      contractRank: toNullableNumber(app.contractRank),
+      consentRank: toNullableNumber(app.consentRank),
+      sourceNote: app.activeSource || "Предварительно по общей позиции",
+    },
+    generalChange: app.generalChange || "Нет предыдущего списка",
+    activeChange: app.activeChange || "Нет сопоставимой активной позиции",
+  };
+}
+
+export async function getDashboardData(): Promise<DashboardData> {
+  const endpoint = import.meta.env.VITE_GAS_ENDPOINT;
+
+  if (!endpoint) {
+    throw new Error("Не задан адрес read-only API. Добавьте VITE_GAS_ENDPOINT в настройки проекта.");
+  }
+
+  const response = await fetch(endpoint, {
+    cache: "no-store",
+    redirect: "follow",
+  });
+
+  if (!response.ok) {
+    throw new Error(`API вернул ошибку ${response.status}.`);
+  }
+
+  const payload = await response.json() as ApiPayload;
+
+  if (!payload?.meta || !Array.isArray(payload.applications) || !Array.isArray(payload.coverage)) {
+    throw new Error("API вернул ответ в неожиданном формате.");
+  }
+
+  return {
+    meta: { ...payload.meta, candidateName: "Елисей" },
+    applications: payload.applications.filter((app) => app.hasList).map(mapApplication),
+    coverage: payload.coverage,
   };
 }
 
 export function buildAnalyticalPhrase(app: Application): string {
   const above = app.position - 1;
-  if (app.basis === "Бюджет") {
-    return `Выше ${above} абитуриентов. Это общая позиция; для бюджета нужны план мест и количество абитуриентов выше с согласием и более высоким приоритетом.`;
-  }
-  return `Выше ${above} абитуриентов. Это общая позиция; для платного нужны число договорных мест и количество договоров, заключённых выше по списку.`;
+  return app.basis === "Бюджет"
+    ? `Выше ${above} абитуриентов. Для точной оценки нужны квота и число абитуриентов выше с подтверждённым согласием.`
+    : `Выше ${above} абитуриентов. Для точной оценки нужны договорные места и количество договоров выше по списку.`;
 }
