@@ -89,6 +89,12 @@ type ApiPayload = {
   coverage: CoverageEntry[];
 };
 
+const DEFAULT_GAS_ENDPOINT = [
+  "https://script.google.com/macros/s/",
+  "AKfycbz3f91C_J50XFzmtSDx-TT7qhNb_1V88BYexp82B6upiyJB1L7iLXprvVAIrkPYNgZxqg",
+  "/exec",
+].join("");
+
 function toNumber(value: ApiNumber, field: string, app: ApiApplication): number {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   throw new Error(`В API нет числового поля «${field}» для группы «${app.group}» (${app.id}).`);
@@ -138,11 +144,7 @@ function mapApplication(app: ApiApplication): Application {
 }
 
 export async function getDashboardData(): Promise<DashboardData> {
-  const endpoint = import.meta.env.VITE_GAS_ENDPOINT;
-
-  if (!endpoint) {
-    throw new Error("Не задан адрес read-only API. Добавьте VITE_GAS_ENDPOINT в настройки проекта.");
-  }
+  const endpoint = import.meta.env.VITE_GAS_ENDPOINT || DEFAULT_GAS_ENDPOINT;
 
   const response = await fetch(endpoint, {
     cache: "no-store",
