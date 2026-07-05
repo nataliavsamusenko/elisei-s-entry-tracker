@@ -67,6 +67,12 @@ const Index = () => {
     .reduce((sum, { control }) => sum + Math.max(0, (control.seats ?? 0) - (control.contractsCount ?? 0)), 0);
   const paidFreeIsKnown = paidApps.some(({ control }) => control.seats !== null && control.contractsCount !== null);
 
+  const rankValue = ({ app, control }: ControlledApplication) => (
+    getActiveRank(app, control) ?? Number.MAX_SAFE_INTEGER
+  );
+  const topBudget = [...budgetApps].sort((a, b) => rankValue(a) - rankValue(b)).slice(0, 3);
+  const topPaid = [...paidApps].sort((a, b) => rankValue(a) - rankValue(b)).slice(0, 3);
+
   if (!meta) {
     return <div className="min-h-screen flex items-center justify-center text-muted-foreground">Загрузка данных…</div>;
   }
@@ -105,6 +111,15 @@ const Index = () => {
             Нули не подставляются: когда поле отсутствует в выгрузке, дашборд показывает «нет данных в выгрузке».
           </p>
         </Card>
+
+        <section>
+          <SectionTitle>Лучшие позиции Елисея</SectionTitle>
+          <p className="text-sm text-muted-foreground mb-4">Топ-3 по минимальной доступной позиции: по согласиям или договорам, когда они опубликованы; иначе по общей позиции в списке.</p>
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+            <TopPositions title="Лучшие позиции на бюджете" basis="Бюджет" items={topBudget} />
+            <TopPositions title="Лучшие позиции на платном" basis="Платное" items={topPaid} />
+          </div>
+        </section>
 
         <section>
           <SectionTitle>Контроль поступления</SectionTitle>
@@ -221,6 +236,52 @@ function KpiCard({ label, value, sub, highlight }: { label: string; value: strin
     <div className={`text-[11px] uppercase tracking-wider ${highlight ? "opacity-80" : "text-muted-foreground"}`}>{label}</div>
     <div className="mt-1.5 text-2xl md:text-3xl font-semibold tracking-tight tabular-nums">{value}</div>
     {sub && <div className={`text-xs mt-1 ${highlight ? "opacity-80" : "text-muted-foreground"}`}>{sub}</div>}
+  </Card>;
+}
+
+function TopPositions({ title, basis, items }: { title: string; basis: "Бюджет" | "Платное"; items: ControlledApplication[] }) {
+  return <Card className="p-4 md:p-5 shadow-card">
+    <div className="flex items-start justify-between gap-3 mb-4">
+      <div>
+        <h3 className="font-semibold">{title}</h3>
+        <p className="text-xs text-muted-foreground mt-1">Меньше номер позиции — выше место в списке.</p>
+      </div>
+      <BasisBadge basis={basis} />
+    </div>
+
+    <div className="space-y-3">
+      {items.map(({ app, control }, index) => {
+        const activeRank = getActiveRank(app, control);
+        const isActiveRank = basis === "Бюджет"
+          ? control.consentRank !== null
+          : control.contractRank !== null;
+        const rankSource = isActiveRank
+          ? basis === "Бюджет" ? "по согласиям" : "по договорам"
+          : "общая позиция";
+        const decision = getDecision(app, control);
+
+        return <div key={app.id} className="flex gap-3 rounded-lg border p-3 bg-card">
+          <div className="shrink-0 w-8 h-8 rounded-full bg-secondary flex items-center justify-center text-sm font-semibold tabular-nums">{index + 1}</div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="font-medium text-sm leading-snug">{app.group}</div>
+                <div className="text-xs text-muted-foreground mt-1">{app.university} · приоритет {app.priority}</div>
+              </div>
+              <div className="text-right shrink-0">
+                <div className="text-xl font-semibold tabular-nums">№ {activeRank ?? "—"}</div>
+                <div className="text-[11px] text-muted-foreground">{rankSource}</div>
+              </div>
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <DecisionBadge kind={decision.kind} label={decision.label} />
+              <span className="text-[11px] text-muted-foreground">общая: № {app.position}</span>
+            </div>
+          </div>
+        </div>;
+      })}
+      {items.length === 0 && <p className="text-sm text-muted-foreground">Пока нет полученных списков.</p>}
+    </div>
   </Card>;
 }
 
