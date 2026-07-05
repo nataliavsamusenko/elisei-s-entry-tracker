@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -27,16 +28,21 @@ const Index = () => {
   const [meta, setMeta] = useState<DashboardMeta | null>(null);
   const [apps, setApps] = useState<Application[]>([]);
   const [coverage, setCoverage] = useState<CoverageEntry[]>([]);
+  const [error, setError] = useState<string | null>(null);
   const [uniFilter, setUniFilter] = useState<string>("all");
   const [basisFilter, setBasisFilter] = useState<string>("all");
   const [query, setQuery] = useState("");
 
   useEffect(() => {
-    getDashboardData().then((data) => {
-      setMeta(data.meta);
-      setApps(data.applications);
-      setCoverage(data.coverage);
-    });
+    getDashboardData()
+      .then((data) => {
+        setMeta(data.meta);
+        setApps(data.applications);
+        setCoverage(data.coverage);
+      })
+      .catch((cause: unknown) => {
+        setError(cause instanceof Error ? cause.message : "Не удалось получить данные из API.");
+      });
   }, []);
 
   const controlled = useMemo<ControlledApplication[]>(
@@ -67,11 +73,21 @@ const Index = () => {
     .reduce((sum, { control }) => sum + Math.max(0, (control.seats ?? 0) - (control.contractsCount ?? 0)), 0);
   const paidFreeIsKnown = paidApps.some(({ control }) => control.seats !== null && control.contractsCount !== null);
 
-  const rankValue = ({ app, control }: ControlledApplication) => (
-    getActiveRank(app, control) ?? Number.MAX_SAFE_INTEGER
-  );
+  const rankValue = ({ app, control }: ControlledApplication) => getActiveRank(app, control) ?? Number.MAX_SAFE_INTEGER;
   const topBudget = [...budgetApps].sort((a, b) => rankValue(a) - rankValue(b)).slice(0, 3);
   const topPaid = [...paidApps].sort((a, b) => rankValue(a) - rankValue(b)).slice(0, 3);
+
+  if (error) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-6">
+        <Card className="max-w-lg p-6 shadow-card">
+          <h1 className="font-semibold text-lg">Данные пока не загрузились</h1>
+          <p className="mt-2 text-sm text-muted-foreground">{error}</p>
+          <p className="mt-4 text-xs text-muted-foreground">Проверьте публикацию read-only API и обновите страницу.</p>
+        </Card>
+      </div>
+    );
+  }
 
   if (!meta) {
     return <div className="min-h-screen flex items-center justify-center text-muted-foreground">Загрузка данных…</div>;
@@ -87,9 +103,9 @@ const Index = () => {
               <h1 className="text-3xl md:text-4xl font-semibold tracking-tight">Трекер поступления Елисея</h1>
               <p className="mt-2 text-sm md:text-base opacity-80">Абитуриент №{meta.candidateId} · Актуальность данных: {meta.lastUpdate}</p>
             </div>
-            <div className="flex flex-col items-start md:items-end gap-2">
+            <div className="flex flex-col items-start md:items-end gap-3">
               <Badge className="bg-warning text-warning-foreground hover:bg-warning border-0 text-sm px-3 py-1">{meta.stage}</Badge>
-              <span className="text-xs opacity-70">Активная позиция появится после публикации согласий и договоров</span>
+              <Link to="/dynamics" className="text-sm underline underline-offset-4 opacity-90 hover:opacity-100">Полная динамика позиций</Link>
             </div>
           </div>
         </div>
@@ -98,7 +114,7 @@ const Index = () => {
       <main className="container py-8 md:py-10 space-y-8">
         <section className="grid grid-cols-2 lg:grid-cols-5 gap-3 md:gap-4">
           <KpiCard label="В пределах квоты" value={String(withinQuota)} sub="по доступным квотам" />
-          <KpiCard label="В резерве" value={String(reserve)} sub="по общей позиции" />
+          <KpiCard label="В резерве" value={String(reserve)} sub="по доступным позициям" />
           <KpiCard label="Свободных платных мест" value={paidFreeIsKnown ? String(paidFreeKnown) : "—"} sub={paidFreeIsKnown ? "по опубликованным договорам" : "нет данных по договорам"} />
           <KpiCard label="Нужны данные" value={String(missingData)} sub="групп требуют уточнения" />
           <KpiCard label="Списков получено" value={`${meta.receivedTotal} / ${meta.totalGroups}`} sub={`${Math.round((meta.receivedTotal / meta.totalGroups) * 100)}% покрытия`} highlight />
@@ -107,14 +123,14 @@ const Index = () => {
         <Card className="p-5 md:p-6 shadow-card border-l-4 border-l-accent">
           <h2 className="text-base md:text-lg font-semibold mb-2">Как читать контроль поступления</h2>
           <p className="text-sm text-muted-foreground leading-relaxed">
-            До публикации согласий на бюджет и заключённых договоров на платное расчёт показывает предварительный ориентир по общей позиции.
-            Нули не подставляются: когда поле отсутствует в выгрузке, дашборд показывает «нет данных в выгрузке».
+            Основная страница показывает текущую позицию и движение к предыдущему снимку. Полная последовательность снимков доступна на странице «Полная динамика позиций».
+            Когда согласия или договоры не подтверждены для Елисея, расчёт остаётся ориентиром по общей позиции.
           </p>
         </Card>
 
         <section>
           <SectionTitle>Лучшие позиции Елисея</SectionTitle>
-          <p className="text-sm text-muted-foreground mb-4">Топ-3 по минимальной доступной позиции: по согласиям или договорам, когда они опубликованы; иначе по общей позиции в списке.</p>
+          <p className="text-sm text-muted-foreground mb-4">Топ-3 по минимальной доступной позиции: по согласиям или договорам, когда они подтверждены; иначе по общей позиции.</p>
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
             <TopPositions title="Лучшие позиции на бюджете" basis="Бюджет" items={topBudget} />
             <TopPositions title="Лучшие позиции на платном" basis="Платное" items={topPaid} />
@@ -154,7 +170,7 @@ const Index = () => {
             </div>
 
             <div className="overflow-x-auto -mx-4 md:mx-0">
-              <table className="w-full text-sm min-w-[1100px]">
+              <table className="w-full text-sm min-w-[1250px]">
                 <thead>
                   <tr className="text-left text-xs uppercase tracking-wider text-muted-foreground border-b">
                     <th className="py-3 px-3">Вуз · основа</th>
@@ -162,6 +178,7 @@ const Index = () => {
                     <th className="py-3 px-3 text-center">Приор.</th>
                     <th className="py-3 px-3 text-center">Балл</th>
                     <th className="py-3 px-3 text-center">Общая поз.</th>
+                    <th className="py-3 px-3">Движение</th>
                     <th className="py-3 px-3">Квота / активность</th>
                     <th className="py-3 px-3">Стоимость</th>
                     <th className="py-3 px-3">Статус</th>
@@ -176,17 +193,18 @@ const Index = () => {
                     return (
                       <tr key={app.id} className="border-b last:border-b-0 hover:bg-secondary/50 transition-colors align-top">
                         <td className="py-3 px-3"><div className="font-medium">{app.university}</div><BasisBadge basis={app.basis} /></td>
-                        <td className="py-3 px-3 max-w-[240px]">{app.group}</td>
+                        <td className="py-3 px-3 max-w-[240px]"><div>{app.group}</div><Link to={`/dynamics?groupId=${encodeURIComponent(app.id)}`} className="text-xs text-primary underline underline-offset-2">История</Link></td>
                         <td className="py-3 px-3 text-center tabular-nums">{app.priority}</td>
                         <td className="py-3 px-3 text-center font-semibold tabular-nums">{app.score}</td>
                         <td className="py-3 px-3 text-center"><span className="inline-flex items-center justify-center min-w-[44px] px-2 py-1 rounded-md bg-secondary font-semibold tabular-nums">{app.position}</span></td>
-                        <td className="py-3 px-3 text-xs"><div>Мест: {control.seats ?? "не сопоставлено"}</div><div className="text-muted-foreground mt-1">{activity}</div></td>
+                        <td className="py-3 px-3 text-xs"><MovementText value={app.generalChange} /><div className="text-muted-foreground mt-1">активная: {app.activeChange}</div></td>
+                        <td className="py-3 px-3 text-xs"><div>Мест: {control.seats ?? "не сопоставлено"}</div><div className="text-muted-foreground mt-1">{activity}</div><div className="text-muted-foreground mt-1">{control.dataReadiness}</div></td>
                         <td className="py-3 px-3 text-xs text-muted-foreground">{app.basis === "Платное" ? (control.semesterFeeText ?? "Стоимость уточняется") : "—"}</td>
                         <td className="py-3 px-3"><DecisionBadge kind={decision.kind} label={decision.label} /><div className="text-[11px] text-muted-foreground mt-1">{decision.detail}</div></td>
                       </tr>
                     );
                   })}
-                  {filtered.length === 0 && <tr><td colSpan={8} className="py-8 text-center text-muted-foreground">Ничего не найдено</td></tr>}
+                  {filtered.length === 0 && <tr><td colSpan={9} className="py-8 text-center text-muted-foreground">Ничего не найдено</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -207,20 +225,20 @@ const Index = () => {
             </Card>
           </section>
           <section>
-            <SectionTitle>Что обновится следующим списком</SectionTitle>
+            <SectionTitle>Следующая контрольная точка</SectionTitle>
             <Card className="p-5 md:p-6 shadow-card">
               <ul className="space-y-3 text-sm text-muted-foreground">
-                <li>• Количество заключённых договоров и договоров выше Елисея на платном.</li>
-                <li>• Количество согласий и позиция среди согласившихся на бюджете.</li>
-                <li>• Свободные места по квоте и статус «в пределах квоты» или «резерв».</li>
-                <li>• Движение позиции к предыдущему снимку.</li>
+                <li>• Новые списки добавят точку в историю выбранной конкурсной группы.</li>
+                <li>• Договоры и согласия могут сформировать активную позицию.</li>
+                <li>• Квоты и стоимость обновляются из листа «План мест».</li>
+                <li>• На главной странице появится сравнение текущей позиции с предыдущей.</li>
               </ul>
             </Card>
           </section>
         </div>
 
         <footer className="pt-4 pb-4 text-center text-xs text-muted-foreground">
-          Источник квот и стоимости: лист «Выбранные университеты». Договоры и согласия появятся из следующих CSV-выгрузок.
+          Текущие списки и история — из трекера поступления. Квоты и стоимость — из листа «План мест».
         </footer>
       </main>
     </div>
@@ -252,12 +270,8 @@ function TopPositions({ title, basis, items }: { title: string; basis: "Бюдж
     <div className="space-y-3">
       {items.map(({ app, control }, index) => {
         const activeRank = getActiveRank(app, control);
-        const isActiveRank = basis === "Бюджет"
-          ? control.consentRank !== null
-          : control.contractRank !== null;
-        const rankSource = isActiveRank
-          ? basis === "Бюджет" ? "по согласиям" : "по договорам"
-          : "общая позиция";
+        const isActiveRank = basis === "Бюджет" ? control.consentRank !== null : control.contractRank !== null;
+        const rankSource = isActiveRank ? basis === "Бюджет" ? "по согласиям" : "по договорам" : "общая позиция";
         const decision = getDecision(app, control);
 
         return <div key={app.id} className="flex gap-3 rounded-lg border p-3 bg-card">
@@ -276,6 +290,7 @@ function TopPositions({ title, basis, items }: { title: string; basis: "Бюдж
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <DecisionBadge kind={decision.kind} label={decision.label} />
               <span className="text-[11px] text-muted-foreground">общая: № {app.position}</span>
+              <MovementText value={app.generalChange} compact />
             </div>
           </div>
         </div>;
@@ -312,14 +327,23 @@ function ControlCard({ app, control }: { app: Application; control: AdmissionCon
     <div className="grid grid-cols-2 gap-x-4 gap-y-2 mt-3 text-xs">
       <Metric label="Мест" value={control.seats === null ? "не сопоставлено" : String(control.seats)} />
       <Metric label="Общая позиция" value={String(app.position)} />
+      <Metric label="Изменение общей" value={app.generalChange} />
+      <Metric label="Изменение активной" value={app.activeChange} />
       <Metric label={`${activeLabel} заключено / подано`} value={formatKnown(count)} />
       <Metric label={`${activeLabel} выше`} value={formatKnown(above)} />
       {app.basis === "Платное" && <Metric label="Свободно по квоте" value={freeSeats === null ? "не рассчитано" : String(freeSeats)} />}
       <Metric label={app.basis === "Бюджет" ? "Позиция по согласиям" : "Позиция по договорам"} value={activeRank === null ? "не рассчитано" : String(activeRank)} />
     </div>
-    {app.basis === "Платное" && <div className="mt-3 text-xs"><span className="text-muted-foreground">Стоимость:</span> <span className="font-medium">{control.semesterFeeText ?? "Стоимость уточняется"}</span></div>}
-    <div className="flex items-start justify-between gap-3 mt-3 pt-3 border-t"><div><DecisionBadge kind={decision.kind} label={decision.label} /><div className="text-[11px] text-muted-foreground mt-1">Источник: {decision.detail}</div></div><span className="text-[11px] text-muted-foreground text-right">{app.snapshot}</span></div>
+    {app.basis === "Платное" && <div className="mt-3 text-xs"><span className="text-muted-foreground">Стоимость за семестр:</span> <span className="font-medium">{control.semesterFeeText ?? "Стоимость уточняется"}</span></div>}
+    <div className="mt-2 text-[11px] text-muted-foreground">{control.dataReadiness}</div>
+    <div className="flex items-start justify-between gap-3 mt-3 pt-3 border-t"><div><DecisionBadge kind={decision.kind} label={decision.label} /><div className="text-[11px] text-muted-foreground mt-1">Источник: {decision.detail}</div></div><div className="text-right"><span className="text-[11px] text-muted-foreground">{app.snapshot}</span><Link to={`/dynamics?groupId=${encodeURIComponent(app.id)}`} className="block mt-1 text-[11px] text-primary underline underline-offset-2">Полная история</Link></div></div>
   </div>;
+}
+
+function MovementText({ value, compact = false }: { value: string; compact?: boolean }) {
+  const lower = value.toLowerCase();
+  const tone = lower.startsWith("+") || lower.includes("поднялся") ? "text-success" : lower.startsWith("-") || lower.includes("опустился") ? "text-warning-foreground" : "text-muted-foreground";
+  return <span className={`text-[11px] ${tone}`}>{compact ? value : `общая: ${value}`}</span>;
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
