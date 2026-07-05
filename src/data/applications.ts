@@ -11,6 +11,8 @@ export interface AdmissionControlData {
   contractRank: number | null;
   consentRank: number | null;
   sourceNote: string;
+  dataReadiness: string;
+  needsClarification: boolean;
 }
 
 export interface Application {
@@ -28,6 +30,23 @@ export interface Application {
   control: AdmissionControlData;
   generalChange: string;
   activeChange: string;
+}
+
+export interface SnapshotHistoryPoint {
+  groupId: string;
+  snapshot: string;
+  score: number | null;
+  generalPosition: number | null;
+  activeRank: number | null;
+  activeSource: string;
+  generalChange: string;
+  activeChange: string;
+  status: string;
+  consentsCount: number | null;
+  consentsAbove: number | null;
+  contractsCount: number | null;
+  contractsAbove: number | null;
+  seats: number | null;
 }
 
 export interface CoverageEntry {
@@ -78,9 +97,29 @@ type ApiApplication = {
   consentRank?: ApiNumber;
   activeSource?: string;
   semesterFeeText?: string | null;
+  dataReadiness?: string;
+  needsClarification?: boolean;
+  sourceNote?: string;
   generalChange?: string;
   activeChange?: string;
   hasList?: boolean;
+};
+
+type ApiHistoryPoint = {
+  groupId: string;
+  snapshot?: string;
+  score?: ApiNumber;
+  generalPosition?: ApiNumber;
+  activeRank?: ApiNumber;
+  activeSource?: string;
+  generalChange?: string;
+  activeChange?: string;
+  status?: string;
+  consentsCount?: ApiNumber;
+  consentsAbove?: ApiNumber;
+  contractsCount?: ApiNumber;
+  contractsAbove?: ApiNumber;
+  seats?: ApiNumber;
 };
 
 type ApiPayload = {
@@ -89,11 +128,25 @@ type ApiPayload = {
   coverage: CoverageEntry[];
 };
 
+type ApiHistoryPayload = {
+  groupId: string;
+  history: ApiHistoryPoint[];
+};
+
 const DEFAULT_GAS_ENDPOINT = [
   "https://script.google.com/macros/s/",
   "AKfycbz3f91C_J50XFzmtSDx-TT7qhNb_1V88BYexp82B6upiyJB1L7iLXprvVAIrkPYNgZxqg",
   "/exec",
 ].join("");
+
+function endpointUrl(groupId?: string): string {
+  const base = import.meta.env.VITE_GAS_ENDPOINT || DEFAULT_GAS_ENDPOINT;
+
+  if (!groupId) return base;
+
+  const divider = base.includes("?") ? "&" : "?";
+  return `${base}${divider}groupId=${encodeURIComponent(groupId)}`;
+}
 
 function toNumber(value: ApiNumber, field: string, app: ApiApplication): number {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -107,6 +160,11 @@ function toNullableNumber(value: ApiNumber): number | null {
 function toBasis(value: string): Basis {
   if (value === "Бюджет" || value === "Платное") return value;
   throw new Error(`Неизвестная основа поступления в API: «${value}».`);
+}
+
+function formatSemesterFee(value: string | null | undefined): string | null {
+  if (!value) return null;
+  return value.includes("₽") ? value : `${value} ₽`;
 }
 
 function mapApplication(app: ApiApplication): Application {
@@ -129,24 +187,43 @@ function mapApplication(app: ApiApplication): Application {
     snapshot: app.snapshot || "Нет даты списка",
     control: {
       seats: toNullableNumber(app.seats),
-      semesterFeeText: app.semesterFeeText ?? null,
+      semesterFeeText: formatSemesterFee(app.semesterFeeText),
       contractsCount: toNullableNumber(app.contractsCount),
       contractsAbove: toNullableNumber(app.contractsAbove),
       consentsCount: toNullableNumber(app.consentsCount),
       consentsAbove: toNullableNumber(app.consentsAbove),
       contractRank: toNullableNumber(app.contractRank),
       consentRank: toNullableNumber(app.consentRank),
-      sourceNote: app.activeSource || "Предварительно по общей позиции",
+      sourceNote: app.sourceNote || app.activeSource || "Предварительно по общей позиции",
+      dataReadiness: app.dataReadiness || "Данные проверяются",
+      needsClarification: Boolean(app.needsClarification),
     },
-    generalChange: app.generalChange || "Нет предыдущего списка",
+    generalChange: app.generalChange || "Первый снимок",
     activeChange: app.activeChange || "Нет сопоставимой активной позиции",
   };
 }
 
-export async function getDashboardData(): Promise<DashboardData> {
-  const endpoint = import.meta.env.VITE_GAS_ENDPOINT || DEFAULT_GAS_ENDPOINT;
+function mapHistoryPoint(point: ApiHistoryPoint): SnapshotHistoryPoint {
+  return {
+    groupId: point.groupId,
+    snapshot: point.snapshot || "Нет даты списка",
+    score: toNullableNumber(point.score),
+    generalPosition: toNullableNumber(point.generalPosition),
+    activeRank: toNullableNumber(point.activeRank),
+    activeSource: point.activeSource || "Предварительно по общей позиции",
+    generalChange: point.generalChange || "Первый снимок",
+    activeChange: point.activeChange || "Нет сопоставимой активной позиции",
+    status: point.status || "Нет данных",
+    consentsCount: toNullableNumber(point.consentsCount),
+    consentsAbove: toNullableNumber(point.consentsAbove),
+    contractsCount: toNullableNumber(point.contractsCount),
+    contractsAbove: toNullableNumber(point.contractsAbove),
+    seats: toNullableNumber(point.seats),
+  };
+}
 
-  const response = await fetch(endpoint, {
+async function requestJson<T>(url: string): Promise<T> {
+  const response = await fetch(url, {
     cache: "no-store",
     redirect: "follow",
   });
@@ -155,7 +232,11 @@ export async function getDashboardData(): Promise<DashboardData> {
     throw new Error(`API вернул ошибку ${response.status}.`);
   }
 
-  const payload = await response.json() as ApiPayload;
+  return response.json() as Promise<T>;
+}
+
+export async function getDashboardData(): Promise<DashboardData> {
+  const payload = await requestJson<ApiPayload>(endpointUrl());
 
   if (!payload?.meta || !Array.isArray(payload.applications) || !Array.isArray(payload.coverage)) {
     throw new Error("API вернул ответ в неожиданном формате.");
@@ -166,6 +247,16 @@ export async function getDashboardData(): Promise<DashboardData> {
     applications: payload.applications.filter((app) => app.hasList).map(mapApplication),
     coverage: payload.coverage,
   };
+}
+
+export async function getGroupHistory(groupId: string): Promise<SnapshotHistoryPoint[]> {
+  const payload = await requestJson<ApiHistoryPayload>(endpointUrl(groupId));
+
+  if (!payload || !Array.isArray(payload.history)) {
+    throw new Error("API не вернул историю по выбранной конкурсной группе.");
+  }
+
+  return payload.history.map(mapHistoryPoint);
 }
 
 export function buildAnalyticalPhrase(app: Application): string {
