@@ -8,9 +8,20 @@ import {
   Application,
   CoverageEntry,
   DashboardMeta,
-  buildAnalyticalPhrase,
   getDashboardData,
 } from "@/data/applications";
+import {
+  AdmissionControl,
+  formatKnown,
+  getActiveRank,
+  getAdmissionControl,
+  getDecision,
+} from "@/data/admission-control";
+
+type ControlledApplication = {
+  app: Application;
+  control: AdmissionControl;
+};
 
 const Index = () => {
   const [meta, setMeta] = useState<DashboardMeta | null>(null);
@@ -21,154 +32,100 @@ const Index = () => {
   const [query, setQuery] = useState("");
 
   useEffect(() => {
-    getDashboardData().then((d) => {
-      setMeta(d.meta);
-      setApps(d.applications);
-      setCoverage(d.coverage);
+    getDashboardData().then((data) => {
+      setMeta(data.meta);
+      setApps(data.applications);
+      setCoverage(data.coverage);
     });
   }, []);
 
+  const controlled = useMemo<ControlledApplication[]>(
+    () => apps.map((app) => ({ app, control: getAdmissionControl(app) })),
+    [apps]
+  );
+
   const universities = useMemo(
-    () => Array.from(new Set(apps.map((a) => a.university))),
+    () => Array.from(new Set(apps.map((item) => item.university))),
     [apps]
   );
 
-  const filtered = useMemo(() => {
-    return apps.filter((a) => {
-      if (uniFilter !== "all" && a.university !== uniFilter) return false;
-      if (basisFilter !== "all" && a.basis !== basisFilter) return false;
-      if (query && !a.group.toLowerCase().includes(query.toLowerCase())) return false;
-      return true;
-    });
-  }, [apps, uniFilter, basisFilter, query]);
+  const filtered = useMemo(() => controlled.filter(({ app }) => {
+    if (uniFilter !== "all" && app.university !== uniFilter) return false;
+    if (basisFilter !== "all" && app.basis !== basisFilter) return false;
+    return !query || app.group.toLowerCase().includes(query.toLowerCase());
+  }), [controlled, uniFilter, basisFilter, query]);
 
-  const top6 = useMemo(
-    () => [...apps].sort((a, b) => a.position - b.position).slice(0, 6),
-    [apps]
-  );
-  const maxTop = top6.length ? Math.max(...top6.map((t) => t.position)) : 1;
+  const budgetApps = controlled.filter(({ app }) => app.basis === "Бюджет");
+  const paidApps = controlled.filter(({ app }) => app.basis === "Платное");
+  const withinQuota = controlled.filter(({ app, control }) => getDecision(app, control).kind === "within").length;
+  const reserve = controlled.filter(({ app, control }) => getDecision(app, control).kind === "reserve").length;
+  const missingData = controlled.filter(({ app, control }) => (
+    control.seats === null || (app.basis === "Платное" ? control.contractsCount === null : control.consentsCount === null)
+  )).length;
+  const paidFreeKnown = paidApps
+    .filter(({ control }) => control.seats !== null && control.contractsCount !== null)
+    .reduce((sum, { control }) => sum + Math.max(0, (control.seats ?? 0) - (control.contractsCount ?? 0)), 0);
+  const paidFreeIsKnown = paidApps.some(({ control }) => control.seats !== null && control.contractsCount !== null);
 
   if (!meta) {
-    return (
-      <div className="min-h-screen flex items-center justify-center text-muted-foreground">
-        Загрузка данных…
-      </div>
-    );
+    return <div className="min-h-screen flex items-center justify-center text-muted-foreground">Загрузка данных…</div>;
   }
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
       <header className="bg-gradient-header text-primary-foreground">
         <div className="container py-8 md:py-10">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
-              <p className="text-xs uppercase tracking-widest opacity-70 mb-2">
-                Приёмная кампания · 2026
-              </p>
-              <h1 className="text-3xl md:text-4xl font-semibold tracking-tight">
-                Трекер поступления Елисея
-              </h1>
-              <p className="mt-2 text-sm md:text-base opacity-80">
-                Абитуриент №{meta.candidateId} · Актуальность данных: {meta.lastUpdate}
-              </p>
+              <p className="text-xs uppercase tracking-widest opacity-70 mb-2">Приёмная кампания · 2026</p>
+              <h1 className="text-3xl md:text-4xl font-semibold tracking-tight">Трекер поступления Елисея</h1>
+              <p className="mt-2 text-sm md:text-base opacity-80">Абитуриент №{meta.candidateId} · Актуальность данных: {meta.lastUpdate}</p>
             </div>
             <div className="flex flex-col items-start md:items-end gap-2">
-              <Badge className="bg-warning text-warning-foreground hover:bg-warning border-0 text-sm px-3 py-1">
-                {meta.stage}
-              </Badge>
-              <span className="text-xs opacity-70">
-                Общая позиция ≠ прогноз поступления
-              </span>
+              <Badge className="bg-warning text-warning-foreground hover:bg-warning border-0 text-sm px-3 py-1">{meta.stage}</Badge>
+              <span className="text-xs opacity-70">Активная позиция появится после публикации согласий и договоров</span>
             </div>
           </div>
         </div>
       </header>
 
       <main className="container py-8 md:py-10 space-y-8">
-        {/* KPIs */}
         <section className="grid grid-cols-2 lg:grid-cols-5 gap-3 md:gap-4">
-          <KpiCard label="Списков получено" value={`${meta.receivedTotal} / ${meta.totalGroups}`} sub={`${Math.round((meta.receivedTotal/meta.totalGroups)*100)}% покрытия`} />
-          <KpiCard label="Бюджет" value={`${meta.budgetReceived} / ${meta.budgetTotal}`} sub="конкурсных групп" />
-          <KpiCard label="Платное" value={`${meta.paidReceived} / ${meta.paidTotal}`} sub="конкурсных групп" />
-          <KpiCard label="Диапазон баллов" value="191–194" sub="по полученным спискам" />
-          <KpiCard label="Лучшая позиция" value="43" sub="СПбГУПТД · Бухучёт" highlight />
+          <KpiCard label="В пределах квоты" value={String(withinQuota)} sub="по доступным квотам" />
+          <KpiCard label="В резерве" value={String(reserve)} sub="по общей позиции" />
+          <KpiCard label="Свободных платных мест" value={paidFreeIsKnown ? String(paidFreeKnown) : "—"} sub={paidFreeIsKnown ? "по опубликованным договорам" : "нет данных по договорам"} />
+          <KpiCard label="Нужны данные" value={String(missingData)} sub="групп требуют уточнения" />
+          <KpiCard label="Списков получено" value={`${meta.receivedTotal} / ${meta.totalGroups}`} sub={`${Math.round((meta.receivedTotal / meta.totalGroups) * 100)}% покрытия`} highlight />
         </section>
 
-        {/* Info block */}
         <Card className="p-5 md:p-6 shadow-card border-l-4 border-l-accent">
-          <h2 className="text-base md:text-lg font-semibold mb-2">Как читать эти цифры</h2>
+          <h2 className="text-base md:text-lg font-semibold mb-2">Как читать контроль поступления</h2>
           <p className="text-sm text-muted-foreground leading-relaxed">
-            Общая позиция в списке — это <strong className="text-foreground">не прогноз поступления</strong>.
-            Для оценки шансов на <strong className="text-foreground">бюджете</strong> нужны план мест и число
-            абитуриентов выше по списку с поданным согласием и более высоким приоритетом. Для{" "}
-            <strong className="text-foreground">платного</strong> — число договорных мест и количество уже
-            заключённых договоров выше по списку. Пока получено 20 из 60 списков — картина неполная.
+            До публикации согласий на бюджет и заключённых договоров на платное расчёт показывает предварительный ориентир по общей позиции.
+            Нули не подставляются: когда поле отсутствует в выгрузке, дашборд показывает «нет данных в выгрузке».
           </p>
         </Card>
 
-        {/* Score profile */}
         <section>
-          <SectionTitle>Профиль баллов</SectionTitle>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <ScoreCard total={194} breakdown="70 / 61 / 60" ai={3} />
-            <ScoreCard total={192} breakdown="70 / 60 / 61" ai={1} />
-            <ScoreCard total={191} breakdown="70 / 60 / 61" ai={0} />
+          <SectionTitle>Контроль поступления</SectionTitle>
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+            <ControlList title="Бюджет: согласия и места" items={budgetApps} />
+            <ControlList title="Платное: договоры и стоимость" items={paidApps} />
           </div>
-          <p className="text-xs text-muted-foreground mt-3 italic">
-            CSV не расшифровывает порядок предметов. Конкретные названия (математика, русский, третий предмет)
-            появятся после подключения справочника «конкурсная группа → предметы».
-          </p>
         </section>
 
-        {/* Top 6 positions */}
-        <section>
-          <SectionTitle>Ближайшие текущие позиции · топ-6</SectionTitle>
-          <Card className="p-5 md:p-6 shadow-card">
-            <div className="space-y-4">
-              {top6.map((t) => (
-                <div key={t.id} className="grid grid-cols-12 items-center gap-3">
-                  <div className="col-span-12 md:col-span-5">
-                    <div className="text-sm font-medium">{t.university} · {t.basis}</div>
-                    <div className="text-xs text-muted-foreground line-clamp-1">{t.group}</div>
-                  </div>
-                  <div className="col-span-8 md:col-span-5">
-                    <div className="h-2 rounded-full bg-secondary overflow-hidden">
-                      <div
-                        className="h-full bg-primary"
-                        style={{ width: `${Math.max(6, ((maxTop - t.position + 10) / (maxTop + 10)) * 100)}%` }}
-                      />
-                    </div>
-                  </div>
-                  <div className="col-span-4 md:col-span-2 flex items-center justify-end gap-3">
-                    <span className="text-xs text-muted-foreground">{t.score} б.</span>
-                    <span className="text-lg font-semibold tabular-nums">#{t.position}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </Card>
-        </section>
-
-        {/* Table with filters */}
         <section>
           <SectionTitle>Все полученные записи</SectionTitle>
           <Card className="p-4 md:p-5 shadow-card">
             <div className="flex flex-wrap gap-3 mb-4">
               <div className="flex-1 min-w-[180px]">
-                <Input
-                  placeholder="Поиск по названию группы…"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                />
+                <Input placeholder="Поиск по названию группы…" value={query} onChange={(event) => setQuery(event.target.value)} />
               </div>
               <Select value={uniFilter} onValueChange={setUniFilter}>
                 <SelectTrigger className="w-[180px]"><SelectValue placeholder="Вуз" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">Все вузы</SelectItem>
-                  {universities.map((u) => (
-                    <SelectItem key={u} value={u}>{u}</SelectItem>
-                  ))}
+                  {universities.map((university) => <SelectItem key={university} value={university}>{university}</SelectItem>)}
                 </SelectContent>
               </Select>
               <Select value={basisFilter} onValueChange={setBasisFilter}>
@@ -182,46 +139,39 @@ const Index = () => {
             </div>
 
             <div className="overflow-x-auto -mx-4 md:mx-0">
-              <table className="w-full text-sm min-w-[900px]">
+              <table className="w-full text-sm min-w-[1100px]">
                 <thead>
                   <tr className="text-left text-xs uppercase tracking-wider text-muted-foreground border-b">
-                    <th className="py-3 px-3">Вуз · Основа</th>
+                    <th className="py-3 px-3">Вуз · основа</th>
                     <th className="py-3 px-3">Конкурсная группа</th>
                     <th className="py-3 px-3 text-center">Приор.</th>
                     <th className="py-3 px-3 text-center">Балл</th>
-                    <th className="py-3 px-3">Состав</th>
-                    <th className="py-3 px-3 text-center">Позиция</th>
+                    <th className="py-3 px-3 text-center">Общая поз.</th>
+                    <th className="py-3 px-3">Квота / активность</th>
+                    <th className="py-3 px-3">Стоимость</th>
                     <th className="py-3 px-3">Статус</th>
-                    <th className="py-3 px-3">Согл./Догов.</th>
-                    <th className="py-3 px-3">Комментарий</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map((a) => (
-                    <tr key={a.id} className="border-b last:border-b-0 hover:bg-secondary/50 transition-colors align-top">
-                      <td className="py-3 px-3">
-                        <div className="font-medium">{a.university}</div>
-                        <BasisBadge basis={a.basis} />
-                      </td>
-                      <td className="py-3 px-3 max-w-[240px]">{a.group}</td>
-                      <td className="py-3 px-3 text-center tabular-nums">{a.priority}</td>
-                      <td className="py-3 px-3 text-center font-semibold tabular-nums">{a.score}</td>
-                      <td className="py-3 px-3 text-xs text-muted-foreground whitespace-nowrap">{a.scoreBreakdown}</td>
-                      <td className="py-3 px-3 text-center">
-                        <span className="inline-flex items-center justify-center min-w-[44px] px-2 py-1 rounded-md bg-secondary font-semibold tabular-nums">
-                          {a.position}
-                        </span>
-                      </td>
-                      <td className="py-3 px-3 text-xs">{a.status}</td>
-                      <td className="py-3 px-3 text-xs text-muted-foreground">{a.consent}</td>
-                      <td className="py-3 px-3 text-xs text-muted-foreground max-w-[280px]">
-                        {buildAnalyticalPhrase(a)}
-                      </td>
-                    </tr>
-                  ))}
-                  {filtered.length === 0 && (
-                    <tr><td colSpan={9} className="py-8 text-center text-muted-foreground">Ничего не найдено</td></tr>
-                  )}
+                  {filtered.map(({ app, control }) => {
+                    const decision = getDecision(app, control);
+                    const activity = app.basis === "Бюджет"
+                      ? `Согласия: ${formatKnown(control.consentsCount)}`
+                      : `Договоры: ${formatKnown(control.contractsCount)}`;
+                    return (
+                      <tr key={app.id} className="border-b last:border-b-0 hover:bg-secondary/50 transition-colors align-top">
+                        <td className="py-3 px-3"><div className="font-medium">{app.university}</div><BasisBadge basis={app.basis} /></td>
+                        <td className="py-3 px-3 max-w-[240px]">{app.group}</td>
+                        <td className="py-3 px-3 text-center tabular-nums">{app.priority}</td>
+                        <td className="py-3 px-3 text-center font-semibold tabular-nums">{app.score}</td>
+                        <td className="py-3 px-3 text-center"><span className="inline-flex items-center justify-center min-w-[44px] px-2 py-1 rounded-md bg-secondary font-semibold tabular-nums">{app.position}</span></td>
+                        <td className="py-3 px-3 text-xs"><div>Мест: {control.seats ?? "не сопоставлено"}</div><div className="text-muted-foreground mt-1">{activity}</div></td>
+                        <td className="py-3 px-3 text-xs text-muted-foreground">{app.basis === "Платное" ? (control.semesterFeeText ?? "Стоимость уточняется") : "—"}</td>
+                        <td className="py-3 px-3"><DecisionBadge kind={decision.kind} label={decision.label} /><div className="text-[11px] text-muted-foreground mt-1">{decision.detail}</div></td>
+                      </tr>
+                    );
+                  })}
+                  {filtered.length === 0 && <tr><td colSpan={8} className="py-8 text-center text-muted-foreground">Ничего не найдено</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -229,56 +179,33 @@ const Index = () => {
         </section>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Coverage */}
           <section>
             <SectionTitle>Покрытие списками по вузам</SectionTitle>
             <Card className="p-5 md:p-6 shadow-card space-y-4">
-              {coverage.map((c) => {
-                const pct = (c.received / c.total) * 100;
-                return (
-                  <div key={c.university}>
-                    <div className="flex items-baseline justify-between mb-1.5">
-                      <span className="font-medium">{c.university}</span>
-                      <span className="text-sm text-muted-foreground tabular-nums">
-                        {c.received} из {c.total}
-                      </span>
-                    </div>
-                    <Progress value={pct} className="h-2" />
-                  </div>
-                );
+              {coverage.map((item) => {
+                const percent = (item.received / item.total) * 100;
+                return <div key={item.university}>
+                  <div className="flex items-baseline justify-between mb-1.5"><span className="font-medium">{item.university}</span><span className="text-sm text-muted-foreground tabular-nums">{item.received} из {item.total}</span></div>
+                  <Progress value={percent} className="h-2" />
+                </div>;
               })}
             </Card>
           </section>
-
-          {/* Needed data */}
           <section>
-            <SectionTitle>Что ещё нужно для точной оценки</SectionTitle>
+            <SectionTitle>Что обновится следующим списком</SectionTitle>
             <Card className="p-5 md:p-6 shadow-card">
-              <ul className="space-y-3 text-sm">
-                {[
-                  "Количество мест по каждой конкурсной группе (бюджет и платное).",
-                  "Максимум и минимум баллов по всей выгрузке — контекст силы конкурса.",
-                  "Общее количество заявлений в каждой группе.",
-                  "Позиция среди подавших согласие (бюджет) и заключивших договор (платное).",
-                  "Динамика к предыдущему снимку — движение вверх/вниз.",
-                  "Справочник «конкурсная группа → математика / русский / третий предмет».",
-                ].map((t, i) => (
-                  <li key={i} className="flex gap-3">
-                    <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-accent shrink-0" />
-                    <span className="text-muted-foreground">{t}</span>
-                  </li>
-                ))}
+              <ul className="space-y-3 text-sm text-muted-foreground">
+                <li>• Количество заключённых договоров и договоров выше Елисея на платном.</li>
+                <li>• Количество согласий и позиция среди согласившихся на бюджете.</li>
+                <li>• Свободные места по квоте и статус «в пределах квоты» или «резерв».</li>
+                <li>• Движение позиции к предыдущему снимку.</li>
               </ul>
-              <div className="mt-5 pt-4 border-t text-xs text-muted-foreground">
-                Эти поля будут рассчитаны автоматически после подключения источника данных (JSON endpoint
-                Google Apps Script).
-              </div>
             </Card>
           </section>
         </div>
 
-        <footer className="pt-6 pb-4 text-center text-xs text-muted-foreground">
-          Демо-данные · В коде подготовлен адаптер <code className="text-foreground">getDashboardData()</code> для переключения на живой источник.
+        <footer className="pt-4 pb-4 text-center text-xs text-muted-foreground">
+          Источник квот и стоимости: лист «Выбранные университеты». Договоры и согласия появятся из следующих CSV-выгрузок.
         </footer>
       </main>
     </div>
@@ -289,52 +216,63 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
   return <h2 className="text-lg md:text-xl font-semibold mb-3 md:mb-4 tracking-tight">{children}</h2>;
 }
 
-function KpiCard({
-  label, value, sub, highlight,
-}: { label: string; value: string; sub?: string; highlight?: boolean }) {
-  return (
-    <Card className={`p-4 md:p-5 shadow-card ${highlight ? "bg-primary text-primary-foreground" : ""}`}>
-      <div className={`text-[11px] uppercase tracking-wider ${highlight ? "opacity-80" : "text-muted-foreground"}`}>
-        {label}
-      </div>
-      <div className="mt-1.5 text-2xl md:text-3xl font-semibold tracking-tight tabular-nums">
-        {value}
-      </div>
-      {sub && (
-        <div className={`text-xs mt-1 ${highlight ? "opacity-80" : "text-muted-foreground"}`}>{sub}</div>
-      )}
-    </Card>
-  );
+function KpiCard({ label, value, sub, highlight }: { label: string; value: string; sub?: string; highlight?: boolean }) {
+  return <Card className={`p-4 md:p-5 shadow-card ${highlight ? "bg-primary text-primary-foreground" : ""}`}>
+    <div className={`text-[11px] uppercase tracking-wider ${highlight ? "opacity-80" : "text-muted-foreground"}`}>{label}</div>
+    <div className="mt-1.5 text-2xl md:text-3xl font-semibold tracking-tight tabular-nums">{value}</div>
+    {sub && <div className={`text-xs mt-1 ${highlight ? "opacity-80" : "text-muted-foreground"}`}>{sub}</div>}
+  </Card>;
 }
 
-function ScoreCard({ total, breakdown, ai }: { total: number; breakdown: string; ai: number }) {
-  return (
-    <Card className="p-5 shadow-card">
-      <div className="flex items-baseline gap-3">
-        <div className="text-4xl font-semibold tracking-tight tabular-nums">{total}</div>
-        <div className="text-xs text-muted-foreground uppercase tracking-wider">баллов</div>
-      </div>
-      <div className="mt-3 text-sm">
-        <span className="text-muted-foreground">Предметы (порядок из CSV):</span>{" "}
-        <span className="font-medium tabular-nums">{breakdown}</span>
-      </div>
-      <div className="mt-1 text-sm">
-        <span className="text-muted-foreground">Индивидуальные достижения:</span>{" "}
-        <span className="font-medium tabular-nums">+{ai}</span>
-      </div>
-    </Card>
-  );
+function ControlList({ title, items }: { title: string; items: ControlledApplication[] }) {
+  return <Card className="p-4 md:p-5 shadow-card">
+    <h3 className="font-semibold mb-4">{title}</h3>
+    <div className="space-y-3">
+      {items.map(({ app, control }) => <ControlCard key={app.id} app={app} control={control} />)}
+    </div>
+  </Card>;
+}
+
+function ControlCard({ app, control }: { app: Application; control: AdmissionControl }) {
+  const decision = getDecision(app, control);
+  const activeRank = getActiveRank(app, control);
+  const count = app.basis === "Бюджет" ? control.consentsCount : control.contractsCount;
+  const above = app.basis === "Бюджет" ? control.consentsAbove : control.contractsAbove;
+  const activeLabel = app.basis === "Бюджет" ? "Согласий" : "Договоров";
+  const freeSeats = app.basis === "Платное" && control.seats !== null && control.contractsCount !== null
+    ? Math.max(0, control.seats - control.contractsCount)
+    : null;
+
+  return <div className="rounded-lg border p-3.5 bg-card">
+    <div className="flex justify-between gap-3">
+      <div><div className="font-medium text-sm leading-snug">{app.group}</div><div className="text-xs text-muted-foreground mt-1">{app.university} · приоритет {app.priority}</div></div>
+      <BasisBadge basis={app.basis} />
+    </div>
+    <div className="grid grid-cols-2 gap-x-4 gap-y-2 mt-3 text-xs">
+      <Metric label="Мест" value={control.seats === null ? "не сопоставлено" : String(control.seats)} />
+      <Metric label="Общая позиция" value={String(app.position)} />
+      <Metric label={`${activeLabel} заключено / подано`} value={formatKnown(count)} />
+      <Metric label={`${activeLabel} выше`} value={formatKnown(above)} />
+      {app.basis === "Платное" && <Metric label="Свободно по квоте" value={freeSeats === null ? "не рассчитано" : String(freeSeats)} />}
+      <Metric label={app.basis === "Бюджет" ? "Позиция по согласиям" : "Позиция по договорам"} value={activeRank === null ? "не рассчитано" : String(activeRank)} />
+    </div>
+    {app.basis === "Платное" && <div className="mt-3 text-xs"><span className="text-muted-foreground">Стоимость:</span> <span className="font-medium">{control.semesterFeeText ?? "Стоимость уточняется"}</span></div>}
+    <div className="flex items-start justify-between gap-3 mt-3 pt-3 border-t"><div><DecisionBadge kind={decision.kind} label={decision.label} /><div className="text-[11px] text-muted-foreground mt-1">Источник: {decision.detail}</div></div><span className="text-[11px] text-muted-foreground text-right">{app.snapshot}</span></div>
+  </div>;
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return <div><div className="text-muted-foreground">{label}</div><div className="font-medium text-foreground mt-0.5">{value}</div></div>;
+}
+
+function DecisionBadge({ kind, label }: { kind: "within" | "reserve" | "unknown"; label: string }) {
+  const style = kind === "within" ? "bg-success/10 text-success" : kind === "reserve" ? "bg-warning/15 text-warning-foreground" : "bg-secondary text-muted-foreground";
+  return <span className={`inline-flex text-[11px] px-2 py-1 rounded-full ${style}`}>{label}</span>;
 }
 
 function BasisBadge({ basis }: { basis: "Бюджет" | "Платное" }) {
   const isBudget = basis === "Бюджет";
-  return (
-    <span className={`inline-block mt-1 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded ${
-      isBudget ? "bg-success/10 text-success" : "bg-accent/10 text-accent"
-    }`}>
-      {basis}
-    </span>
-  );
+  return <span className={`inline-block text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded ${isBudget ? "bg-success/10 text-success" : "bg-accent/10 text-accent"}`}>{basis}</span>;
 }
 
 export default Index;
