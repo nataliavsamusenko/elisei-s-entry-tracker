@@ -1,0 +1,93 @@
+{
+  "version": 1,
+  "sdk_version": "0.20.0",
+  "path": "/functions/v1/mcp",
+  "auth": {
+    "type": "none"
+  },
+  "mcp": {
+    "server": {
+      "name": "eliseus-admissions-mcp",
+      "version": "0.1.0",
+      "title": "Трекер поступления Елисея — MCP"
+    },
+    "tools": [
+      {
+        "name": "get_dashboard_summary",
+        "title": "Сводка дашборда",
+        "description": "Возвращает общую сводку по поступлению Елисея (№1431604): мета-информацию, покрытие списками по вузам и агрегаты (получено списков, бюджет/платное, стадия конкурса).",
+        "annotations": {
+          "readOnlyHint": true,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "inputSchema": {
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "type": "object",
+          "properties": {}
+        },
+        "outputSchema": null
+      },
+      {
+        "name": "list_applications",
+        "title": "Список заявлений",
+        "description": "Возвращает записи из конкурсных списков с необязательной фильтрацией по вузу и основе (Бюджет/Платное) и сортировкой по позиции.",
+        "annotations": {
+          "readOnlyHint": true,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "university": {
+              "type": "string",
+              "description": "Фильтр по названию вуза, напр. 'СПбГУПТД'."
+            },
+            "basis": {
+              "type": "string",
+              "enum": [
+                "Бюджет",
+                "Платное"
+              ],
+              "description": "Фильтр по основе поступления."
+            },
+            "limit": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 100,
+              "description": "Максимум записей в ответе."
+            }
+          },
+          "additionalProperties": false,
+          "$schema": "http://json-schema.org/draft-07/schema#"
+        },
+        "outputSchema": null
+      },
+      {
+        "name": "get_top_positions",
+        "title": "Лучшие текущие позиции",
+        "description": "Возвращает N наилучших (самых близких к началу) текущих позиций Елисея по всем полученным конкурсным спискам.",
+        "annotations": {
+          "readOnlyHint": true,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "count": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 20,
+              "description": "Сколько позиций вернуть (по умолчанию 6)."
+            }
+          },
+          "additionalProperties": false,
+          "$schema": "http://json-schema.org/draft-07/schema#"
+        },
+        "outputSchema": null
+      }
+    ]
+  }
+}
