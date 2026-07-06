@@ -203,6 +203,7 @@ const Dynamics = () => {
                   {history.map((item, index) => {
                     const count = selected.basis === "Бюджет" ? item.consentsCount : item.contractsCount;
                     const above = selected.basis === "Бюджет" ? item.consentsAbove : item.contractsAbove;
+                    const aboveHigherPriority = selected.basis === "Бюджет" ? item.consentsAboveHigherPriority : item.contractsAboveHigherPriority;
                     const label = selected.basis === "Бюджет" ? "согласий" : "договоров";
                     return <tr key={`${item.snapshot}-${index}`} className="border-b last:border-0 align-top">
                       <td className="py-3 px-3 tabular-nums">{item.snapshot}</td>
@@ -212,7 +213,7 @@ const Dynamics = () => {
                       <td className="py-3 px-3 text-center font-medium tabular-nums">{item.activeRank ?? "—"}</td>
                       <td className="py-3 px-3 text-xs text-muted-foreground">{item.activeSource}</td>
                       <td className="py-3 px-3"><Movement value={item.activeChange} /></td>
-                      <td className="py-3 px-3 text-xs">{label}: {formatNullable(count)}<br /><span className="text-muted-foreground">выше: {formatNullable(above)}</span></td>
+                      <td className="py-3 px-3 text-xs">{label}: {formatNullable(count)}<br /><span className="text-muted-foreground">выше: {formatNullable(above)}</span><br /><span className="text-muted-foreground">из них с приоритетом выше: {formatHigherPriorityCount(aboveHigherPriority, selected.priority)}</span></td>
                       <td className="py-3 px-3 text-xs">{item.status}</td>
                     </tr>;
                   })}
@@ -257,6 +258,11 @@ function getTotalMovement(first: number | null, latest: number | null): string {
 
 function formatNullable(value: number | null): string {
   return value === null ? "нет данных" : String(value);
+}
+
+function formatHigherPriorityCount(value: number | null, selectedPriority: number): string {
+  if (value !== null) return String(value);
+  return selectedPriority <= 1 ? "0" : "нет данных";
 }
 
 export default Dynamics;

@@ -6,8 +6,10 @@ export interface AdmissionControlData {
   semesterFeeText: string | null;
   contractsCount: number | null;
   contractsAbove: number | null;
+  contractsAboveHigherPriority: number | null;
   consentsCount: number | null;
   consentsAbove: number | null;
+  consentsAboveHigherPriority: number | null;
   contractRank: number | null;
   consentRank: number | null;
   sourceNote: string;
@@ -44,8 +46,10 @@ export interface SnapshotHistoryPoint {
   status: string;
   consentsCount: number | null;
   consentsAbove: number | null;
+  consentsAboveHigherPriority: number | null;
   contractsCount: number | null;
   contractsAbove: number | null;
+  contractsAboveHigherPriority: number | null;
   seats: number | null;
 }
 
@@ -91,8 +95,10 @@ type ApiApplication = {
   seats?: ApiNumber;
   contractsCount?: ApiNumber;
   contractsAbove?: ApiNumber;
+  contractsAboveHigherPriority?: ApiNumber;
   consentsCount?: ApiNumber;
   consentsAbove?: ApiNumber;
+  consentsAboveHigherPriority?: ApiNumber;
   contractRank?: ApiNumber;
   consentRank?: ApiNumber;
   activeSource?: string;
@@ -117,8 +123,10 @@ type ApiHistoryPoint = {
   status?: string;
   consentsCount?: ApiNumber;
   consentsAbove?: ApiNumber;
+  consentsAboveHigherPriority?: ApiNumber;
   contractsCount?: ApiNumber;
   contractsAbove?: ApiNumber;
+  contractsAboveHigherPriority?: ApiNumber;
   seats?: ApiNumber;
 };
 
@@ -157,6 +165,13 @@ function toNullableNumber(value: ApiNumber): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function toHigherPriorityCount(value: ApiNumber, priority: number): number | null {
+  const count = toNullableNumber(value);
+  if (count !== null) return count;
+
+  return priority <= 1 ? 0 : null;
+}
+
 function toBasis(value: string): Basis {
   if (value === "Бюджет" || value === "Платное") return value;
   throw new Error(`Неизвестная основа поступления в API: «${value}».`);
@@ -169,6 +184,7 @@ function formatSemesterFee(value: string | null | undefined): string | null {
 
 function mapApplication(app: ApiApplication): Application {
   const basis = toBasis(app.basis);
+  const priority = toNumber(app.priority, "Приоритет", app);
   const confirmation = basis === "Бюджет"
     ? `Согласие: ${app.consent || "—"}`
     : `Договор: ${app.contract || "—"}`;
@@ -178,7 +194,7 @@ function mapApplication(app: ApiApplication): Application {
     university: app.university,
     basis,
     group: app.group,
-    priority: toNumber(app.priority, "Приоритет", app),
+    priority,
     score: toNumber(app.score, "Балл Елисея", app),
     scoreBreakdown: "",
     position: toNumber(app.generalPosition, "Позиция общая", app),
@@ -190,8 +206,10 @@ function mapApplication(app: ApiApplication): Application {
       semesterFeeText: formatSemesterFee(app.semesterFeeText),
       contractsCount: toNullableNumber(app.contractsCount),
       contractsAbove: toNullableNumber(app.contractsAbove),
+      contractsAboveHigherPriority: toHigherPriorityCount(app.contractsAboveHigherPriority, priority),
       consentsCount: toNullableNumber(app.consentsCount),
       consentsAbove: toNullableNumber(app.consentsAbove),
+      consentsAboveHigherPriority: toHigherPriorityCount(app.consentsAboveHigherPriority, priority),
       contractRank: toNullableNumber(app.contractRank),
       consentRank: toNullableNumber(app.consentRank),
       sourceNote: app.sourceNote || app.activeSource || "Предварительно по общей позиции",
@@ -216,8 +234,10 @@ function mapHistoryPoint(point: ApiHistoryPoint): SnapshotHistoryPoint {
     status: point.status || "Нет данных",
     consentsCount: toNullableNumber(point.consentsCount),
     consentsAbove: toNullableNumber(point.consentsAbove),
+    consentsAboveHigherPriority: toNullableNumber(point.consentsAboveHigherPriority),
     contractsCount: toNullableNumber(point.contractsCount),
     contractsAbove: toNullableNumber(point.contractsAbove),
+    contractsAboveHigherPriority: toNullableNumber(point.contractsAboveHigherPriority),
     seats: toNullableNumber(point.seats),
   };
 }
