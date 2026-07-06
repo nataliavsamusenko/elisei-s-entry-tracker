@@ -104,7 +104,7 @@ const Index = () => {
               <p className="mt-2 text-sm md:text-base opacity-80">Абитуриент №{meta.candidateId} · Актуальность данных: {meta.lastUpdate}</p>
             </div>
             <div className="flex flex-col items-start md:items-end gap-3">
-              <Badge className="bg-warning text-warning-foreground hover:bg-warning border-0 text-sm px-3 py-1">{meta.stage}</Badge>
+              <Badge className="bg-warning text-warning-foreground hover:bg-warning border-0 text-sm px-3 py-1">{formatDashboardStage(meta.stage)}</Badge>
               <Link to="/dynamics" className="text-sm underline underline-offset-4 opacity-90 hover:opacity-100">Полная динамика позиций</Link>
             </div>
           </div>
@@ -198,7 +198,7 @@ const Index = () => {
                         <td className="py-3 px-3 text-center font-semibold tabular-nums">{app.score}</td>
                         <td className="py-3 px-3 text-center"><span className="inline-flex items-center justify-center min-w-[44px] px-2 py-1 rounded-md bg-secondary font-semibold tabular-nums">{app.position}</span></td>
                         <td className="py-3 px-3 text-xs"><MovementText value={app.generalChange} /><div className="text-muted-foreground mt-1">активная: {app.activeChange}</div></td>
-                        <td className="py-3 px-3 text-xs"><div>Мест: {control.seats ?? "не сопоставлено"}</div><div className="text-muted-foreground mt-1">{activity}</div><div className="text-muted-foreground mt-1">{control.dataReadiness}</div></td>
+                        <td className="py-3 px-3 text-xs"><div>Мест: {control.seats ?? "не сопоставлено"}</div><div className="text-muted-foreground mt-1">{activity}</div></td>
                         <td className="py-3 px-3 text-xs text-muted-foreground">{app.basis === "Платное" ? (control.semesterFeeText ?? "Стоимость уточняется") : "—"}</td>
                         <td className="py-3 px-3"><DecisionBadge kind={decision.kind} label={decision.label} /><div className="text-[11px] text-muted-foreground mt-1">{decision.detail}</div></td>
                       </tr>
@@ -272,7 +272,6 @@ function TopPositions({ title, basis, items }: { title: string; basis: "Бюдж
         const activeRank = getActiveRank(app, control);
         const isActiveRank = basis === "Бюджет" ? control.consentRank !== null : control.contractRank !== null;
         const rankSource = isActiveRank ? basis === "Бюджет" ? "по согласиям" : "по договорам" : "общая позиция";
-        const decision = getDecision(app, control);
 
         return <div key={app.id} className="flex gap-3 rounded-lg border p-3 bg-card">
           <div className="shrink-0 w-8 h-8 rounded-full bg-secondary flex items-center justify-center text-sm font-semibold tabular-nums">{index + 1}</div>
@@ -288,7 +287,7 @@ function TopPositions({ title, basis, items }: { title: string; basis: "Бюдж
               </div>
             </div>
             <div className="mt-3 flex flex-wrap items-center gap-2">
-              <DecisionBadge kind={decision.kind} label={decision.label} />
+              <QuotaBadge seats={control.seats} />
               <span className="text-[11px] text-muted-foreground">общая: № {app.position}</span>
               <MovementText value={app.generalChange} compact />
             </div>
@@ -314,6 +313,9 @@ function ControlCard({ app, control }: { app: Application; control: AdmissionCon
   const activeRank = getActiveRank(app, control);
   const count = app.basis === "Бюджет" ? control.consentsCount : control.contractsCount;
   const above = app.basis === "Бюджет" ? control.consentsAbove : control.contractsAbove;
+  const aboveHigherPriority = app.basis === "Бюджет"
+    ? control.consentsAboveHigherPriority
+    : control.contractsAboveHigherPriority;
   const activeLabel = app.basis === "Бюджет" ? "Согласий" : "Договоров";
   const freeSeats = app.basis === "Платное" && control.seats !== null && control.contractsCount !== null
     ? Math.max(0, control.seats - control.contractsCount)
@@ -330,12 +332,11 @@ function ControlCard({ app, control }: { app: Application; control: AdmissionCon
       <Metric label="Изменение общей" value={app.generalChange} />
       <Metric label="Изменение активной" value={app.activeChange} />
       <Metric label={`${activeLabel} заключено / подано`} value={formatKnown(count)} />
-      <Metric label={`${activeLabel} выше`} value={formatKnown(above)} />
+      <Metric label={`${activeLabel} выше`} value={formatAboveWithPriority(above, aboveHigherPriority)} />
       {app.basis === "Платное" && <Metric label="Свободно по квоте" value={freeSeats === null ? "не рассчитано" : String(freeSeats)} />}
       <Metric label={app.basis === "Бюджет" ? "Позиция по согласиям" : "Позиция по договорам"} value={activeRank === null ? "не рассчитано" : String(activeRank)} />
     </div>
     {app.basis === "Платное" && <div className="mt-3 text-xs"><span className="text-muted-foreground">Стоимость за семестр:</span> <span className="font-medium">{control.semesterFeeText ?? "Стоимость уточняется"}</span></div>}
-    <div className="mt-2 text-[11px] text-muted-foreground">{control.dataReadiness}</div>
     <div className="flex items-start justify-between gap-3 mt-3 pt-3 border-t"><div><DecisionBadge kind={decision.kind} label={decision.label} /><div className="text-[11px] text-muted-foreground mt-1">Источник: {decision.detail}</div></div><div className="text-right"><span className="text-[11px] text-muted-foreground">{app.snapshot}</span><Link to={`/dynamics?groupId=${encodeURIComponent(app.id)}`} className="block mt-1 text-[11px] text-primary underline underline-offset-2">Полная история</Link></div></div>
   </div>;
 }
@@ -350,9 +351,26 @@ function Metric({ label, value }: { label: string; value: string }) {
   return <div><div className="text-muted-foreground">{label}</div><div className="font-medium text-foreground mt-0.5">{value}</div></div>;
 }
 
+function QuotaBadge({ seats }: { seats: number | null }) {
+  return <span className="inline-flex text-[11px] px-2 py-1 rounded-full bg-secondary text-foreground">Квота: {seats ?? "не сопоставлена"}</span>;
+}
+
 function DecisionBadge({ kind, label }: { kind: "within" | "reserve" | "unknown"; label: string }) {
   const style = kind === "within" ? "bg-success/10 text-success" : kind === "reserve" ? "bg-warning/15 text-warning-foreground" : "bg-secondary text-muted-foreground";
   return <span className={`inline-flex text-[11px] px-2 py-1 rounded-full ${style}`}>{label}</span>;
+}
+
+function formatAboveWithPriority(total: number | null, higherPriority: number | null): string {
+  const totalText = total === null ? "нет данных" : String(total);
+  const higherPriorityText = higherPriority === null ? "нет данных" : String(higherPriority);
+
+  return `${totalText}; из них с приоритетом выше: ${higherPriorityText}`;
+}
+
+function formatDashboardStage(stage: string): string {
+  const lower = stage.toLowerCase();
+
+  return lower.includes("csv") || lower.includes("дашборд") ? "Данные обновлены" : stage;
 }
 
 function BasisBadge({ basis }: { basis: "Бюджет" | "Платное" }) {
