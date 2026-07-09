@@ -53,6 +53,47 @@ export interface SnapshotHistoryPoint {
   seats: number | null;
 }
 
+export interface ListChangeItem {
+  groupId: string;
+  university: string;
+  basis: Basis;
+  groupName: string;
+  currentSnapshot: string;
+  previousSnapshot: string;
+  applicantPriorityCurrent: number | null;
+  applicantPriorityPrevious: number | null;
+  newApplications: number | null;
+  newApplicationsHigherPriority: number | null;
+  leftApplications: number | null;
+  leftApplicationsHigherPriority: number | null;
+  newConsents: number | null;
+  newConsentsHigherPriority: number | null;
+  newContracts: number | null;
+  newContractsHigherPriority: number | null;
+  leftConsentsWithApplication: number | null;
+  leftConsentsWithApplicationHigherPriority: number | null;
+  leftContractsWithApplication: number | null;
+  leftContractsWithApplicationHigherPriority: number | null;
+  comment: string;
+  calculatedAt: string;
+}
+
+export interface ChangesData {
+  generatedAt: string;
+  filters: {
+    groupId: string;
+    university: string;
+    basis: string;
+  };
+  items: ListChangeItem[];
+}
+
+export type ChangesFilters = {
+  groupId?: string;
+  university?: string;
+  basis?: Basis;
+};
+
 export interface CoverageEntry {
   university: string;
   received: number;
@@ -141,19 +182,67 @@ type ApiHistoryPayload = {
   history: ApiHistoryPoint[];
 };
 
+type ApiChangeItem = {
+  groupId: string;
+  university: string;
+  basis: string;
+  groupName?: string;
+  currentSnapshot?: string;
+  previousSnapshot?: string;
+  applicantPriorityCurrent?: ApiNumber;
+  applicantPriorityPrevious?: ApiNumber;
+  newApplications?: ApiNumber;
+  newApplicationsHigherPriority?: ApiNumber;
+  leftApplications?: ApiNumber;
+  leftApplicationsHigherPriority?: ApiNumber;
+  newConsents?: ApiNumber;
+  newConsentsHigherPriority?: ApiNumber;
+  newContracts?: ApiNumber;
+  newContractsHigherPriority?: ApiNumber;
+  leftConsentsWithApplication?: ApiNumber;
+  leftConsentsWithApplicationHigherPriority?: ApiNumber;
+  leftContractsWithApplication?: ApiNumber;
+  leftContractsWithApplicationHigherPriority?: ApiNumber;
+  comment?: string;
+  calculatedAt?: string;
+};
+
+type ApiChangesPayload = {
+  generatedAt?: string;
+  filters?: {
+    groupId?: string;
+    university?: string;
+    basis?: string;
+  };
+  items: ApiChangeItem[];
+};
+
 const DEFAULT_GAS_ENDPOINT = [
   "https://script.google.com/macros/s/",
   "AKfycbz3f91C_J50XFzmtSDx-TT7qhNb_1V88BYexp82B6upiyJB1L7iLXprvVAIrkPYNgZxqg",
   "/exec",
 ].join("");
 
-function endpointUrl(groupId?: string): string {
+function endpointUrl(params?: string | Record<string, string | undefined>): string {
   const base = import.meta.env.VITE_GAS_ENDPOINT || DEFAULT_GAS_ENDPOINT;
 
-  if (!groupId) return base;
+  if (!params) return base;
+
+  const query = new URLSearchParams();
+
+  if (typeof params === "string") {
+    query.set("groupId", params);
+  } else {
+    Object.entries(params).forEach(([key, value]) => {
+      if (value) query.set(key, value);
+    });
+  }
+
+  const search = query.toString();
+  if (!search) return base;
 
   const divider = base.includes("?") ? "&" : "?";
-  return `${base}${divider}groupId=${encodeURIComponent(groupId)}`;
+  return `${base}${divider}${search}`;
 }
 
 function toNumber(value: ApiNumber, field: string, app: ApiApplication): number {
@@ -242,6 +331,33 @@ function mapHistoryPoint(point: ApiHistoryPoint): SnapshotHistoryPoint {
   };
 }
 
+function mapChangeItem(item: ApiChangeItem): ListChangeItem {
+  return {
+    groupId: String(item.groupId),
+    university: item.university,
+    basis: toBasis(item.basis),
+    groupName: item.groupName || "Без названия группы",
+    currentSnapshot: item.currentSnapshot || "Нет даты списка",
+    previousSnapshot: item.previousSnapshot || "Нет предыдущего снимка",
+    applicantPriorityCurrent: toNullableNumber(item.applicantPriorityCurrent),
+    applicantPriorityPrevious: toNullableNumber(item.applicantPriorityPrevious),
+    newApplications: toNullableNumber(item.newApplications),
+    newApplicationsHigherPriority: toNullableNumber(item.newApplicationsHigherPriority),
+    leftApplications: toNullableNumber(item.leftApplications),
+    leftApplicationsHigherPriority: toNullableNumber(item.leftApplicationsHigherPriority),
+    newConsents: toNullableNumber(item.newConsents),
+    newConsentsHigherPriority: toNullableNumber(item.newConsentsHigherPriority),
+    newContracts: toNullableNumber(item.newContracts),
+    newContractsHigherPriority: toNullableNumber(item.newContractsHigherPriority),
+    leftConsentsWithApplication: toNullableNumber(item.leftConsentsWithApplication),
+    leftConsentsWithApplicationHigherPriority: toNullableNumber(item.leftConsentsWithApplicationHigherPriority),
+    leftContractsWithApplication: toNullableNumber(item.leftContractsWithApplication),
+    leftContractsWithApplicationHigherPriority: toNullableNumber(item.leftContractsWithApplicationHigherPriority),
+    comment: item.comment || "",
+    calculatedAt: item.calculatedAt || "",
+  };
+}
+
 async function requestJson<T>(url: string): Promise<T> {
   const response = await fetch(url, {
     cache: "no-store",
@@ -277,6 +393,29 @@ export async function getGroupHistory(groupId: string): Promise<SnapshotHistoryP
   }
 
   return payload.history.map(mapHistoryPoint);
+}
+
+export async function getChanges(filters: ChangesFilters = {}): Promise<ChangesData> {
+  const payload = await requestJson<ApiChangesPayload>(endpointUrl({
+    action: "changes",
+    groupId: filters.groupId,
+    university: filters.university,
+    basis: filters.basis,
+  }));
+
+  if (!payload || !Array.isArray(payload.items)) {
+    throw new Error("API не вернул изменения списков.");
+  }
+
+  return {
+    generatedAt: payload.generatedAt || "",
+    filters: {
+      groupId: payload.filters?.groupId || "",
+      university: payload.filters?.university || "",
+      basis: payload.filters?.basis || "",
+    },
+    items: payload.items.map(mapChangeItem),
+  };
 }
 
 export function buildAnalyticalPhrase(app: Application): string {
