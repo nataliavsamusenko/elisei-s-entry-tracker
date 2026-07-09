@@ -8,15 +8,41 @@
 
 После сохранения: **Deploy → Manage deployments → Edit → New version → Deploy**. Адрес `/exec` останется тем же.
 
+## Быстрый endpoint для страницы `/dynamics`
+
+Для страницы динамики используйте отдельный лёгкий запрос:
+
+```text
+/exec?action=history&groupId=<ID группы>
+```
+
+Эта ветка `doGet(e)` должна:
+
+- читать только лист `Снимки`;
+- фильтровать строки только по выбранному `groupId`;
+- возвращать короткий JSON с полями `date`, `position`, `score`, `priority`, `status`, `consentsAbove`, `consentsAboveHigherPriority`, `contractsAbove`, `contractsAboveHigherPriority`;
+- не запускать пересчёт, обновление `Реестр`, обновление `Дашборд`, чтение Drive или `buildCanonicalHistories_`;
+- кэшировать ответ через `CacheService` на 300 секунд по ключу `history:<groupId>`.
+
 ```javascript
 function doGet(e) {
+  const action = String(
+    (e && e.parameter && e.parameter.action) || ''
+  ).trim();
+
   const groupId = String(
     (e && e.parameter && e.parameter.groupId) || ''
   ).trim();
 
-  const payload = groupId
-    ? buildGroupHistoryPayload_(groupId)
-    : buildAdmissionApiPayload_();
+  let payload;
+
+  if (action === 'history' && groupId) {
+    payload = buildFastGroupHistoryPayload_(groupId);
+  } else if (groupId) {
+    payload = buildGroupHistoryPayload_(groupId);
+  } else {
+    payload = buildAdmissionApiPayload_();
+  }
 
   return ContentService
     .createTextOutput(JSON.stringify(payload))
@@ -516,5 +542,118 @@ function apiMovementText_(value) {
   }
 
   return text;
+}
+
+
+function buildFastGroupHistoryPayload_(groupId) {
+  const cache = CacheService.getScriptCache();
+  const cacheKey = 'history:' + groupId;
+  const cached = cache.get(cacheKey);
+
+  if (cached) {
+    try {
+      return JSON.parse(cached);
+    } catch (error) {
+      // Если кэш повреждён, пересобираем ответ ниже.
+    }
+  }
+
+  const ss = SpreadsheetApp.openById(CFG.spreadsheetId);
+  const snapshotsSheet = ss.getSheetByName(CFG.sheets.snapshots);
+  const payload = {
+    groupId: groupId,
+    history: []
+  };
+
+  if (!snapshotsSheet || snapshotsSheet.getLastRow() < 2) {
+    cache.put(cacheKey, JSON.stringify(payload), 300);
+    return payload;
+  }
+
+  const header = headers_(snapshotsSheet).map;
+  const groupColumn = header['ID группы'];
+
+  if (groupColumn === undefined) {
+    cache.put(cacheKey, JSON.stringify(payload), 300);
+    return payload;
+  }
+
+  const rows = snapshotsSheet.getDataRange().getValues();
+  const unique = {};
+
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i];
+
+    if (String(row[groupColumn] || '').trim() !== groupId) {
+      continue;
+    }
+
+    const date = displayDateValue_(
+      valueFromRow_(row, header, 'Дата и время списка', '')
+    );
+
+    const position = apiNumber_(
+      valueFromRow_(row, header, 'Позиция общая', null)
+    );
+
+    const hash = String(
+      valueFromRow_(row, header, 'Хеш содержимого', '')
+    ).trim();
+
+    const item = {
+      rowNumber: i + 1,
+      sortDate: snapshotSortDate_(date, i + 1),
+      hash: hash,
+      date: date,
+      position: position,
+      score: apiNumber_(valueFromRow_(row, header, 'Балл Елисея', null)),
+      priority: apiNumber_(valueFromRow_(row, header, 'Приоритет', null)),
+      status: String(valueFromRow_(row, header, 'Статус Елисея', 'Нет данных')),
+      consentsAbove: apiNumber_(valueFromRow_(row, header, 'Согласий выше Елисея', null)),
+      consentsAboveHigherPriority: apiNumber_(valueFromRow_(row, header, 'Согласий выше с более высоким приоритетом', null)),
+      contractsAbove: apiNumber_(valueFromRow_(row, header, 'Договоров выше Елисея', null)),
+      contractsAboveHigherPriority: apiNumber_(valueFromRow_(row, header, 'Договоров выше с более высоким приоритетом', null))
+    };
+
+    const dedupeKey = item.hash
+      ? 'hash|' + item.hash
+      : 'fallback|' + item.date + '|' + item.position;
+
+    const existing = unique[dedupeKey];
+
+    if (
+      !existing ||
+      item.sortDate > existing.sortDate ||
+      (item.sortDate === existing.sortDate && item.rowNumber > existing.rowNumber)
+    ) {
+      unique[dedupeKey] = item;
+    }
+  }
+
+  payload.history = Object.keys(unique)
+    .map(function (key) {
+      return unique[key];
+    })
+    .sort(function (first, second) {
+      return first.sortDate - second.sortDate ||
+        first.rowNumber - second.rowNumber;
+    })
+    .map(function (item) {
+      return {
+        date: item.date,
+        position: item.position,
+        score: item.score,
+        priority: item.priority,
+        status: item.status,
+        consentsAbove: item.consentsAbove,
+        consentsAboveHigherPriority: item.consentsAboveHigherPriority,
+        contractsAbove: item.contractsAbove,
+        contractsAboveHigherPriority: item.contractsAboveHigherPriority
+      };
+    });
+
+  cache.put(cacheKey, JSON.stringify(payload), 300);
+
+  return payload;
 }
 ```

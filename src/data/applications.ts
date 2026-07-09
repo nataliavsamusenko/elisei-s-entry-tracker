@@ -35,22 +35,15 @@ export interface Application {
 }
 
 export interface SnapshotHistoryPoint {
-  groupId: string;
-  snapshot: string;
+  date: string;
+  position: number | null;
   score: number | null;
-  generalPosition: number | null;
-  activeRank: number | null;
-  activeSource: string;
-  generalChange: string;
-  activeChange: string;
+  priority: number | null;
   status: string;
-  consentsCount: number | null;
   consentsAbove: number | null;
   consentsAboveHigherPriority: number | null;
-  contractsCount: number | null;
   contractsAbove: number | null;
   contractsAboveHigherPriority: number | null;
-  seats: number | null;
 }
 
 export interface CoverageEntry {
@@ -112,22 +105,16 @@ type ApiApplication = {
 };
 
 type ApiHistoryPoint = {
-  groupId: string;
+  date?: string;
   snapshot?: string;
+  position?: ApiNumber;
   score?: ApiNumber;
-  generalPosition?: ApiNumber;
-  activeRank?: ApiNumber;
-  activeSource?: string;
-  generalChange?: string;
-  activeChange?: string;
+  priority?: ApiNumber;
   status?: string;
-  consentsCount?: ApiNumber;
   consentsAbove?: ApiNumber;
   consentsAboveHigherPriority?: ApiNumber;
-  contractsCount?: ApiNumber;
   contractsAbove?: ApiNumber;
   contractsAboveHigherPriority?: ApiNumber;
-  seats?: ApiNumber;
 };
 
 type ApiPayload = {
@@ -147,13 +134,13 @@ const DEFAULT_GAS_ENDPOINT = [
   "/exec",
 ].join("");
 
-function endpointUrl(groupId?: string): string {
+function endpointUrl(params?: Record<string, string>): string {
   const base = import.meta.env.VITE_GAS_ENDPOINT || DEFAULT_GAS_ENDPOINT;
 
-  if (!groupId) return base;
+  if (!params) return base;
 
   const divider = base.includes("?") ? "&" : "?";
-  return `${base}${divider}groupId=${encodeURIComponent(groupId)}`;
+  return `${base}${divider}${new URLSearchParams(params).toString()}`;
 }
 
 function toNumber(value: ApiNumber, field: string, app: ApiApplication): number {
@@ -223,22 +210,15 @@ function mapApplication(app: ApiApplication): Application {
 
 function mapHistoryPoint(point: ApiHistoryPoint): SnapshotHistoryPoint {
   return {
-    groupId: point.groupId,
-    snapshot: point.snapshot || "Нет даты списка",
+    date: point.date || point.snapshot || "Нет даты списка",
+    position: toNullableNumber(point.position),
     score: toNullableNumber(point.score),
-    generalPosition: toNullableNumber(point.generalPosition),
-    activeRank: toNullableNumber(point.activeRank),
-    activeSource: point.activeSource || "Предварительно по общей позиции",
-    generalChange: point.generalChange || "Первый снимок",
-    activeChange: point.activeChange || "Нет сопоставимой активной позиции",
+    priority: toNullableNumber(point.priority),
     status: point.status || "Нет данных",
-    consentsCount: toNullableNumber(point.consentsCount),
     consentsAbove: toNullableNumber(point.consentsAbove),
     consentsAboveHigherPriority: toNullableNumber(point.consentsAboveHigherPriority),
-    contractsCount: toNullableNumber(point.contractsCount),
     contractsAbove: toNullableNumber(point.contractsAbove),
     contractsAboveHigherPriority: toNullableNumber(point.contractsAboveHigherPriority),
-    seats: toNullableNumber(point.seats),
   };
 }
 
@@ -270,7 +250,10 @@ export async function getDashboardData(): Promise<DashboardData> {
 }
 
 export async function getGroupHistory(groupId: string): Promise<SnapshotHistoryPoint[]> {
-  const payload = await requestJson<ApiHistoryPayload>(endpointUrl(groupId));
+  const payload = await requestJson<ApiHistoryPayload>(endpointUrl({
+    action: "history",
+    groupId,
+  }));
 
   if (!payload || !Array.isArray(payload.history)) {
     throw new Error("API не вернул историю по выбранной конкурсной группе.");
