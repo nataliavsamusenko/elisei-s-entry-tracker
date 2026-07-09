@@ -92,6 +92,7 @@ export type ChangesFilters = {
   groupId?: string;
   university?: string;
   basis?: Basis;
+  limit?: number;
 };
 
 export interface CoverageEntry {
@@ -338,7 +339,7 @@ function mapChangeItem(item: ApiChangeItem): ListChangeItem {
     basis: toBasis(item.basis),
     groupName: item.groupName || "Без названия группы",
     currentSnapshot: item.currentSnapshot || "Нет даты списка",
-    previousSnapshot: item.previousSnapshot || "Нет предыдущего снимка",
+    previousSnapshot: item.previousSnapshot || "",
     applicantPriorityCurrent: toNullableNumber(item.applicantPriorityCurrent),
     applicantPriorityPrevious: toNullableNumber(item.applicantPriorityPrevious),
     newApplications: toNullableNumber(item.newApplications),
@@ -401,6 +402,7 @@ export async function getChanges(filters: ChangesFilters = {}): Promise<ChangesD
     groupId: filters.groupId,
     university: filters.university,
     basis: filters.basis,
+    limit: filters.limit ? String(filters.limit) : undefined,
   }));
 
   if (!payload || !Array.isArray(payload.items)) {
