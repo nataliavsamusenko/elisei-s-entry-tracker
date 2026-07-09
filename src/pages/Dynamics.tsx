@@ -118,7 +118,10 @@ const Dynamics = () => {
               <h1 className="text-3xl md:text-4xl font-semibold tracking-tight">Динамика позиций</h1>
               <p className="mt-2 text-sm md:text-base opacity-80">Полная история по одной выбранной конкурсной группе</p>
             </div>
-            <Link to="/" className="text-sm underline underline-offset-4 opacity-90 hover:opacity-100">Вернуться к текущей ситуации</Link>
+            <div className="flex flex-col items-start md:items-end gap-2 text-sm">
+              <Link to="/" className="underline underline-offset-4 opacity-90 hover:opacity-100">Вернуться к текущей ситуации</Link>
+              <Link to="/changes" className="underline underline-offset-4 opacity-90 hover:opacity-100">Изменения списков</Link>
+            </div>
           </div>
         </div>
       </header>
