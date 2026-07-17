@@ -127,7 +127,7 @@ const Index = () => {
           <KpiCard label="В пределах квоты" value={String(withinQuota)} sub="по доступным квотам" />
           <KpiCard label="В резерве" value={String(reserve)} sub="по доступным позициям" />
           <KpiCard label="Свободных платных мест" value={paidFreeIsKnown ? String(paidFreeKnown) : "—"} sub={paidFreeIsKnown ? "по опубликованным договорам" : "нет данных по договорам"} />
-          <KpiCard label="Нужны данные" value={String(missingData)} sub="групп требуют уточнения" />
+          <ConfirmationsKpiCard consents={consentsCount} contracts={contractsCount} />
           <KpiCard label="Списков получено" value={`${meta.receivedTotal} / ${meta.totalGroups}`} sub={`${Math.round((meta.receivedTotal / meta.totalGroups) * 100)}% покрытия`} highlight />
         </section>
 
