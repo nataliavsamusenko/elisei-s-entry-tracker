@@ -28,7 +28,10 @@ export interface Application {
   position: number;
   status: Status;
   consent: string;
+  consentRaw: string;
+  contractRaw: string;
   snapshot: string;
+
   control: AdmissionControlData;
   generalChange: string;
   activeChange: string;
