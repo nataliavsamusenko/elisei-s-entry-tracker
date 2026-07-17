@@ -77,6 +77,9 @@ const Index = () => {
     .filter(({ control }) => control.seats !== null && control.contractsCount !== null)
     .reduce((sum, { control }) => sum + Math.max(0, (control.seats ?? 0) - (control.contractsCount ?? 0)), 0);
   const paidFreeIsKnown = paidApps.some(({ control }) => control.seats !== null && control.contractsCount !== null);
+  const consentsCount = apps.filter(hasBudgetConsent).length;
+  const contractsCount = apps.filter(hasPaidContract).length;
+
 
   const rankValue = ({ app, control }: ControlledApplication) => getActiveRank(app, control) ?? Number.MAX_SAFE_INTEGER;
   const topBudget = [...budgetApps].sort((a, b) => rankValue(a) - rankValue(b)).slice(0, 3);
