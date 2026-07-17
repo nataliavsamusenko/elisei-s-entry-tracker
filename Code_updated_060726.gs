@@ -3,7 +3,7 @@ const CFG = {
   applicantId: '1431604',
   rootFolderId: '12SbS6N5dICiOkG5R4YS8b-E3XknSnY_Z',
   maxSnapshotsPerGroup: 20,
-  applicantRebuildBatchSize: 6,
+  applicantRebuildBatchSize: 1,
 
   sheets: {
     dashboard: 'Дашборд',
