@@ -10,7 +10,10 @@ import {
   CoverageEntry,
   DashboardMeta,
   getDashboardData,
+  hasBudgetConsent,
+  hasPaidContract,
 } from "@/data/applications";
+
 import {
   AdmissionControl,
   formatKnown,
