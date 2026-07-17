@@ -293,7 +293,10 @@ function mapApplication(app: ApiApplication): Application {
     position: toNumber(app.generalPosition, "Позиция общая", app),
     status: app.status || "Нет данных",
     consent: confirmation,
+    consentRaw: app.consent ?? "",
+    contractRaw: app.contract ?? "",
     snapshot: app.snapshot || "Нет даты списка",
+
     control: {
       seats: toNullableNumber(app.seats),
       semesterFeeText: formatSemesterFee(app.semesterFeeText),

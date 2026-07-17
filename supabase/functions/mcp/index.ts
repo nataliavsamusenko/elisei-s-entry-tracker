@@ -68,6 +68,8 @@ function mapApplication(app) {
     position: toNumber(app.generalPosition, "\u041F\u043E\u0437\u0438\u0446\u0438\u044F \u043E\u0431\u0449\u0430\u044F", app),
     status: app.status || "\u041D\u0435\u0442 \u0434\u0430\u043D\u043D\u044B\u0445",
     consent: confirmation,
+    consentRaw: app.consent ?? "",
+    contractRaw: app.contract ?? "",
     snapshot: app.snapshot || "\u041D\u0435\u0442 \u0434\u0430\u0442\u044B \u0441\u043F\u0438\u0441\u043A\u0430",
     control: {
       seats: toNullableNumber(app.seats),
