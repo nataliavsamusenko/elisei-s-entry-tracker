@@ -248,9 +248,22 @@ const Index = () => {
           </section>
         </div>
 
+        <section>
+          <Card className="p-5 md:p-6 shadow-card bg-secondary/40 border-dashed">
+            <div className="flex flex-wrap items-baseline justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-semibold text-foreground">Полнота данных</h3>
+                <p className="text-xs text-muted-foreground mt-1">Группы, где ещё не сопоставлены места или не опубликованы согласия/договоры.</p>
+              </div>
+              <div className="text-2xl font-semibold tabular-nums text-muted-foreground">{missingData}</div>
+            </div>
+          </Card>
+        </section>
+
         <footer className="pt-4 pb-4 text-center text-xs text-muted-foreground">
           Текущие списки и история — из трекера поступления. Квоты и стоимость — из листа «План мест».
         </footer>
+
       </main>
     </div>
   );
