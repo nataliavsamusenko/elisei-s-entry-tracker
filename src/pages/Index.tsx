@@ -281,6 +281,33 @@ function KpiCard({ label, value, sub, highlight }: { label: string; value: strin
   </Card>;
 }
 
+function ConfirmationsKpiCard({ consents, contracts }: { consents: number; contracts: number }) {
+  return (
+    <a
+      href="/confirmations"
+      target="_blank"
+      rel="noopener noreferrer"
+      className="block group focus:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded-lg"
+    >
+      <Card className="p-4 md:p-5 shadow-card border-l-4 border-l-accent transition-colors group-hover:bg-secondary/50 h-full">
+        <div className="text-[11px] uppercase tracking-wider text-muted-foreground">Подтверждения Елисея</div>
+        <div className="mt-2 space-y-1">
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="text-xs text-muted-foreground">Согласий</span>
+            <span className="text-xl md:text-2xl font-semibold tabular-nums">{consents}</span>
+          </div>
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="text-xs text-muted-foreground">Договоров</span>
+            <span className="text-xl md:text-2xl font-semibold tabular-nums">{contracts}</span>
+          </div>
+        </div>
+        <div className="text-[11px] text-accent mt-2 underline underline-offset-2">Открыть список →</div>
+      </Card>
+    </a>
+  );
+}
+
+
 function TopPositions({ title, basis, items }: { title: string; basis: "Бюджет" | "Платное"; items: ControlledApplication[] }) {
   return <Card className="p-4 md:p-5 shadow-card">
     <div className="flex items-start justify-between gap-3 mb-4">
