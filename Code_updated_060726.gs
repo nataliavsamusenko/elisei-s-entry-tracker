@@ -3,6 +3,7 @@ const CFG = {
   applicantId: '1431604',
   rootFolderId: '12SbS6N5dICiOkG5R4YS8b-E3XknSnY_Z',
   maxSnapshotsPerGroup: 20,
+  applicantRebuildBatchSize: 6,
 
   sheets: {
     dashboard: 'Дашборд',
@@ -11,7 +12,10 @@ const CFG = {
     changes: 'Изменения',
     journal: 'Журнал файлов',
     plan: 'План мест',
-    state: 'CSV_состояние'
+    state: 'CSV_состояние',
+    allApplications: 'Все заявления',
+    applicants: 'Поступающие',
+    applicationsStaging: 'Все заявления_сборка'
   },
 
   ignoredFolders: ['планы мест'],
@@ -34,6 +38,10 @@ function onOpen() {
     .addItem('Пересобрать Дашборд', 'refreshDashboardAndApi')
     .addItem('Дозаполнить текущие CSV', 'backfillCurrentLists')
     .addItem('Пересчитать изменения списков', 'backfillChangeMetrics')
+    .addSeparator()
+    .addItem('Начать сбор карты поступающих', 'startApplicantsRebuild')
+    .addItem('Продолжить сбор карты поступающих', 'continueApplicantsRebuild')
+    .addSeparator()
     .addItem('Включить обновление раз в час', 'createAutomaticUpdateTrigger')
     .addItem('Выключить обновление раз в час', 'deleteAutomaticUpdateTrigger')
     .addItem('Проверить API в журнале', 'testApi')
@@ -230,6 +238,15 @@ function testApi() {
  *
  * /exec?action=changes
  *   Готовые изменения списков без чтения Drive.
+ *
+ * /exec?action=applicants
+ *   Сводный обезличенный список поступающих с фильтрами.
+ *
+ * /exec?action=applicant&profileKey=...
+ *   Карточка поступающего по безопасному ключу профиля.
+ *
+ * /exec?action=applicant&applicantId=1234567
+ *   Точный поиск карточки по коду поступающего.
  */
 function doGet(e) {
   const params =
@@ -252,6 +269,10 @@ function doGet(e) {
 
   if (action === 'changes') {
     payload = buildChangesPayload_(params);
+  } else if (action === 'applicants') {
+    payload = buildApplicantsPayload_(params);
+  } else if (action === 'applicant') {
+    payload = buildApplicantProfilePayload_(params);
   } else if (groupId) {
     payload = buildFastGroupHistoryPayload_(groupId);
   } else {
@@ -314,6 +335,7 @@ function processCsvFiles_(ss, mode) {
   const registry = getRegistry_(registrySheet);
   let snapshotIndex = buildSnapshotIndex_(snapshotsSheet);
   const known = getKnownKeys_(stateSheet);
+  const applicationUpdates = {};
 
   const result = {
     checked: 0,
@@ -465,6 +487,16 @@ function processCsvFiles_(ss, mode) {
         return;
       }
 
+      queueApplicationGroupUpdate_(
+        applicationUpdates,
+        registry,
+        group,
+        file,
+        text,
+        item.path,
+        hash
+      );
+
       const parsed = parseApplicant_(text);
 
       if (!parsed || !parsed.candidate) {
@@ -603,6 +635,7 @@ function processCsvFiles_(ss, mode) {
   });
 
   trimSnapshots_(snapshotsSheet);
+  applyApplicationGroupUpdates_(ss, applicationUpdates);
 
   return result;
 }
@@ -3175,6 +3208,1692 @@ function clearChangesCache_(
 
 
 /* =========================================================
+   КАРТА ВСЕХ ПОСТУПАЮЩИХ
+   ========================================================= */
+
+const APPLICANTS_REBUILD_QUEUE_PROPERTY =
+  'APPLICANTS_REBUILD_QUEUE';
+
+const APPLICANTS_REBUILD_CURSOR_PROPERTY =
+  'APPLICANTS_REBUILD_CURSOR';
+
+const APPLICANTS_REBUILD_ERRORS_PROPERTY =
+  'APPLICANTS_REBUILD_ERRORS';
+
+
+/**
+ * Начинает безопасную порционную сборку актуальных заявлений.
+ * Рабочие данные заменяются только после обработки всей очереди.
+ */
+function startApplicantsRebuild() {
+  withLock_(function () {
+    const ss = SpreadsheetApp.openById(
+      CFG.spreadsheetId
+    );
+
+    ensureSchemas_(ss);
+
+    const queue = buildLatestApplicantSources_(ss);
+    const props = PropertiesService.getScriptProperties();
+    const staging = ss.getSheetByName(
+      CFG.sheets.applicationsStaging
+    );
+
+    clearDataRows_(staging);
+
+    props.setProperty(
+      APPLICANTS_REBUILD_QUEUE_PROPERTY,
+      JSON.stringify(queue)
+    );
+
+    props.setProperty(
+      APPLICANTS_REBUILD_CURSOR_PROPERTY,
+      '0'
+    );
+
+    props.setProperty(
+      APPLICANTS_REBUILD_ERRORS_PROPERTY,
+      '0'
+    );
+
+    removeApplicantRebuildTriggers_();
+
+    const progress = continueApplicantsRebuildBatch_(ss);
+
+    ss.toast(
+      applicantRebuildProgressMessage_(progress),
+      'Карта поступающих',
+      15
+    );
+  });
+}
+
+
+/**
+ * Продолжает ранее начатую сборку следующей порцией групп.
+ */
+function continueApplicantsRebuild() {
+  withLock_(function () {
+    const ss = SpreadsheetApp.openById(
+      CFG.spreadsheetId
+    );
+
+    ensureSchemas_(ss);
+    removeApplicantRebuildTriggers_();
+
+    const progress = continueApplicantsRebuildBatch_(ss);
+
+    ss.toast(
+      applicantRebuildProgressMessage_(progress),
+      'Карта поступающих',
+      15
+    );
+  });
+}
+
+
+function continueApplicantsRebuildBatch_(ss) {
+  const props = PropertiesService.getScriptProperties();
+  const queueText = props.getProperty(
+    APPLICANTS_REBUILD_QUEUE_PROPERTY
+  );
+
+  if (!queueText) {
+    return {
+      processed: 0,
+      total: 0,
+      errors: 0,
+      completed: true,
+      message: 'Активная сборка не найдена.'
+    };
+  }
+
+  const queue = JSON.parse(queueText);
+  const cursor = Math.max(
+    0,
+    Number(
+      props.getProperty(
+        APPLICANTS_REBUILD_CURSOR_PROPERTY
+      ) || 0
+    )
+  );
+
+  const previousErrors = Math.max(
+    0,
+    Number(
+      props.getProperty(
+        APPLICANTS_REBUILD_ERRORS_PROPERTY
+      ) || 0
+    )
+  );
+
+  const end = Math.min(
+    queue.length,
+    cursor + CFG.applicantRebuildBatchSize
+  );
+
+  const registry = getRegistry_(
+    ss.getSheetByName(CFG.sheets.registry)
+  );
+
+  const staging = ss.getSheetByName(
+    CFG.sheets.applicationsStaging
+  );
+
+  const updates = {};
+  let errors = previousErrors;
+
+  for (let i = cursor; i < end; i++) {
+    const source = queue[i];
+    const group = registry.byId[source.groupId];
+
+    if (!group) {
+      errors++;
+      continue;
+    }
+
+    try {
+      const file = DriveApp.getFileById(source.fileId);
+      const text = getFileText_(file);
+      const hash = makeHash_(text);
+
+      queueApplicationGroupUpdate_(
+        updates,
+        registry,
+        group,
+        file,
+        text,
+        '',
+        hash
+      );
+    } catch (error) {
+      errors++;
+
+      Logger.log(
+        'Ошибка карты поступающих для ' +
+        source.groupId +
+        ': ' +
+        String(error)
+      );
+    }
+  }
+
+  appendApplicationUpdatesToSheet_(
+    staging,
+    updates
+  );
+
+  props.setProperty(
+    APPLICANTS_REBUILD_CURSOR_PROPERTY,
+    String(end)
+  );
+
+  props.setProperty(
+    APPLICANTS_REBUILD_ERRORS_PROPERTY,
+    String(errors)
+  );
+
+  const completed = end >= queue.length;
+
+  if (completed) {
+    publishApplicantStaging_(ss, errors === 0);
+    rebuildApplicantProfiles_(ss);
+
+    props.deleteProperty(
+      APPLICANTS_REBUILD_QUEUE_PROPERTY
+    );
+
+    props.deleteProperty(
+      APPLICANTS_REBUILD_CURSOR_PROPERTY
+    );
+
+    props.deleteProperty(
+      APPLICANTS_REBUILD_ERRORS_PROPERTY
+    );
+
+    removeApplicantRebuildTriggers_();
+  } else {
+    createApplicantRebuildTrigger_();
+  }
+
+  return {
+    processed: end,
+    total: queue.length,
+    errors: errors,
+    completed: completed
+  };
+}
+
+
+function appendApplicationUpdatesToSheet_(sheet, updates) {
+  const headerNames = applicationMapHeaders_();
+  let rows = [];
+
+  Object.keys(updates)
+    .sort()
+    .forEach(function (groupId) {
+      rows = rows.concat(updates[groupId].rows);
+    });
+
+  if (!rows.length) {
+    return false;
+  }
+
+  ensureSheetCapacity_(
+    sheet,
+    sheet.getLastRow() + rows.length,
+    headerNames.length
+  );
+
+  sheet
+    .getRange(
+      sheet.getLastRow() + 1,
+      1,
+      rows.length,
+      headerNames.length
+    )
+    .setValues(
+      rows.map(function (item) {
+        return headerNames.map(function (name) {
+          return Object.prototype.hasOwnProperty.call(
+            item,
+            name
+          )
+            ? item[name]
+            : '';
+        });
+      })
+    );
+
+  return true;
+}
+
+
+function applicantRebuildProgressMessage_(progress) {
+  if (progress.message) {
+    return progress.message;
+  }
+
+  if (progress.completed) {
+    return (
+      'Сборка завершена. Обработано групп: ' +
+      progress.processed +
+      ' из ' +
+      progress.total +
+      '. Ошибок: ' +
+      progress.errors +
+      '.'
+    );
+  }
+
+  return (
+    'Обработано групп: ' +
+    progress.processed +
+    ' из ' +
+    progress.total +
+    '. Продолжение запустится автоматически. Ошибок: ' +
+    progress.errors +
+    '.'
+  );
+}
+
+
+function buildLatestApplicantSources_(ss) {
+  const registry = getRegistry_(
+    ss.getSheetByName(CFG.sheets.registry)
+  );
+
+  const latest = {};
+
+  getAllCsvFiles_().forEach(function (item) {
+    const context = getFolderContext_(item.pathNames);
+
+    if (!context) {
+      return;
+    }
+
+    const group = findGroup_(
+      registry,
+      context,
+      item.file.getName()
+    );
+
+    if (!group) {
+      return;
+    }
+
+    const sortDate = snapshotSortDate_(
+      getListDate_(item.file),
+      item.file.getLastUpdated().getTime()
+    );
+
+    const existing = latest[group.id];
+
+    if (
+      !existing ||
+      sortDate > existing.sortDate ||
+      (
+        sortDate === existing.sortDate &&
+        item.file.getLastUpdated().getTime() >
+        existing.updatedAt
+      )
+    ) {
+      latest[group.id] = {
+        groupId: group.id,
+        fileId: item.file.getId(),
+        sortDate: sortDate,
+        updatedAt: item.file.getLastUpdated().getTime()
+      };
+    }
+  });
+
+  return Object.keys(latest)
+    .sort()
+    .map(function (groupId) {
+      return {
+        groupId: groupId,
+        fileId: latest[groupId].fileId
+      };
+    });
+}
+
+
+function createApplicantRebuildTrigger_() {
+  removeApplicantRebuildTriggers_();
+
+  ScriptApp.newTrigger('continueApplicantsRebuild')
+    .timeBased()
+    .after(60 * 1000)
+    .create();
+}
+
+
+function removeApplicantRebuildTriggers_() {
+  ScriptApp.getProjectTriggers().forEach(function (trigger) {
+    if (
+      trigger.getHandlerFunction() ===
+      'continueApplicantsRebuild'
+    ) {
+      ScriptApp.deleteTrigger(trigger);
+    }
+  });
+}
+
+
+function queueApplicationGroupUpdate_(
+  updates,
+  registry,
+  group,
+  file,
+  text,
+  path,
+  hash
+) {
+  const state = parseParticipantsState_(text);
+
+  if (!hasParticipantRows_(state)) {
+    Logger.log(
+      'Не удалось прочитать участников для ' +
+      group.id +
+      ': ' +
+      file.getName()
+    );
+
+    return;
+  }
+
+  const snapshot = getListDate_(file);
+  const sortDate = snapshotSortDate_(
+    snapshot,
+    file.getLastUpdated().getTime()
+  );
+
+  const existing = updates[group.id];
+
+  if (
+    existing &&
+    existing.sortDate > sortDate
+  ) {
+    return;
+  }
+
+  updates[group.id] = {
+    groupId: group.id,
+    sortDate: sortDate,
+    rows: buildApplicationRowsForGroup_(
+      registry,
+      group,
+      state,
+      file,
+      path,
+      hash,
+      snapshot,
+      sortDate
+    )
+  };
+}
+
+
+function buildApplicationRowsForGroup_(
+  registry,
+  group,
+  state,
+  file,
+  path,
+  hash,
+  snapshot,
+  sortDate
+) {
+  const seats = numberOrNull_(
+    group.row[
+      registry.headers['Мест']
+    ]
+  );
+
+  const records = Object.keys(state.rows)
+    .map(function (id) {
+      return state.rows[id];
+    })
+    .sort(function (first, second) {
+      const firstPosition = first.position === null
+        ? Number.MAX_SAFE_INTEGER
+        : first.position;
+
+      const secondPosition = second.position === null
+        ? Number.MAX_SAFE_INTEGER
+        : second.position;
+
+      return firstPosition - secondPosition;
+    });
+
+  let consentRank = 0;
+  let contractRank = 0;
+
+  return records.map(function (record) {
+    if (record.hasConsent) {
+      consentRank++;
+    }
+
+    if (record.hasContract) {
+      contractRank++;
+    }
+
+    return {
+      'Код поступающего': record.id,
+      'Ключ профиля': makeApplicantProfileKey_(record.id),
+      'Код для показа': maskApplicantCode_(record.id),
+      'ID группы': group.id,
+      'Вуз': group.university,
+      'Основа': group.basis,
+      'Конкурсная группа': group.name,
+      'Приоритет': valueOrBlank_(record.priority),
+      'Балл': valueOrBlank_(record.score),
+      'Общая позиция': valueOrBlank_(record.position),
+      'Статус': record.status,
+      'Согласие': displayValue_(
+        record.consentValue,
+        state.hasConsentColumn
+      ),
+      'Согласие подано': record.hasConsent
+        ? 'Да'
+        : 'Нет',
+      'Позиция по согласию': record.hasConsent
+        ? consentRank
+        : '',
+      'Договор': displayValue_(
+        record.contractValue,
+        state.hasContractColumn
+      ),
+      'Договор заключён': record.hasContract
+        ? 'Да'
+        : 'Нет',
+      'Позиция по договору': record.hasContract
+        ? contractRank
+        : '',
+      'Мест': valueOrBlank_(seats),
+      'Дата списка': snapshot,
+      'Метка времени списка': sortDate,
+      'ID файла Drive': file.getId(),
+      'Файл': file.getName(),
+      'Путь к файлу': path,
+      'Хеш CSV': hash,
+      'Время обработки': formatDateTime_(new Date())
+    };
+  });
+}
+
+
+function applyApplicationGroupUpdates_(ss, updates) {
+  if (!Object.keys(updates).length) {
+    return;
+  }
+
+  const sheet = ss.getSheetByName(
+    CFG.sheets.allApplications
+  );
+
+  const changed = applyApplicationUpdatesToSheet_(
+    sheet,
+    updates
+  );
+
+  if (changed) {
+    rebuildApplicantProfiles_(ss);
+  }
+}
+
+
+function applyApplicationUpdatesToSheet_(sheet, updates) {
+  const updateIds = Object.keys(updates);
+
+  if (!updateIds.length) {
+    return false;
+  }
+
+  const header = headers_(sheet);
+  const data = sheet.getDataRange().getValues();
+  const groupColumn = header.map['ID группы'];
+  const dateColumn = header.map['Метка времени списка'];
+  const currentDates = {};
+
+  if (groupColumn !== undefined) {
+    for (let i = 1; i < data.length; i++) {
+      const groupId = String(
+        data[i][groupColumn] || ''
+      ).trim();
+
+      const date = dateColumn === undefined
+        ? 0
+        : numberOrNull_(data[i][dateColumn]) || 0;
+
+      if (
+        groupId &&
+        (
+          currentDates[groupId] === undefined ||
+          date > currentDates[groupId]
+        )
+      ) {
+        currentDates[groupId] = date;
+      }
+    }
+  }
+
+  const accepted = {};
+
+  updateIds.forEach(function (groupId) {
+    const currentDate = currentDates[groupId] || 0;
+
+    if (updates[groupId].sortDate >= currentDate) {
+      accepted[groupId] = updates[groupId];
+    }
+  });
+
+  const acceptedIds = Object.keys(accepted);
+
+  if (!acceptedIds.length) {
+    return false;
+  }
+
+  let remaining = [];
+
+  for (let i = 1; i < data.length; i++) {
+    const groupId = groupColumn === undefined
+      ? ''
+      : String(data[i][groupColumn] || '').trim();
+
+    if (!accepted[groupId]) {
+      remaining.push(rowToObject_(
+        data[i],
+        header.values
+      ));
+    }
+  }
+
+  acceptedIds.forEach(function (groupId) {
+    remaining = remaining.concat(
+      accepted[groupId].rows
+    );
+  });
+
+  remaining.sort(compareApplicationObjects_);
+
+  writeObjectsToSheet_(
+    sheet,
+    applicationMapHeaders_(),
+    remaining,
+    true
+  );
+
+  return true;
+}
+
+
+function publishApplicantStaging_(ss, replaceAll) {
+  const staging = ss.getSheetByName(
+    CFG.sheets.applicationsStaging
+  );
+
+  const header = headers_(staging);
+  const data = staging.getDataRange().getValues();
+  const liveSheet = ss.getSheetByName(
+    CFG.sheets.allApplications
+  );
+
+  if (replaceAll) {
+    const rows = data.slice(1).map(function (row) {
+      return rowToObject_(row, header.values);
+    });
+
+    rows.sort(compareApplicationObjects_);
+
+    writeObjectsToSheet_(
+      liveSheet,
+      applicationMapHeaders_(),
+      rows,
+      true
+    );
+
+    return;
+  }
+
+  const groupColumn = header.map['ID группы'];
+  const dateColumn = header.map['Метка времени списка'];
+  const updates = {};
+
+  if (groupColumn === undefined) {
+    return;
+  }
+
+  for (let i = 1; i < data.length; i++) {
+    const groupId = String(
+      data[i][groupColumn] || ''
+    ).trim();
+
+    if (!groupId) {
+      continue;
+    }
+
+    if (!updates[groupId]) {
+      updates[groupId] = {
+        groupId: groupId,
+        sortDate: dateColumn === undefined
+          ? 0
+          : numberOrNull_(data[i][dateColumn]) || 0,
+        rows: []
+      };
+    }
+
+    updates[groupId].rows.push(
+      rowToObject_(data[i], header.values)
+    );
+  }
+
+  applyApplicationUpdatesToSheet_(
+    liveSheet,
+    updates
+  );
+}
+
+
+function rebuildApplicantProfiles_(ss) {
+  const applicationsSheet = ss.getSheetByName(
+    CFG.sheets.allApplications
+  );
+
+  const profilesSheet = ss.getSheetByName(
+    CFG.sheets.applicants
+  );
+
+  const header = headers_(applicationsSheet);
+  const data = applicationsSheet.getDataRange().getValues();
+  const profiles = {};
+
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    const code = String(
+      valueFromRow_(
+        row,
+        header.map,
+        'Код поступающего',
+        ''
+      )
+    ).trim();
+
+    if (!code) {
+      continue;
+    }
+
+    if (!profiles[code]) {
+      profiles[code] = {
+        code: code,
+        profileKey: makeApplicantProfileKey_(code),
+        universities: {},
+        applications: 0,
+        budget: 0,
+        paid: 0,
+        minPriority: null,
+        maxScore: null,
+        consents: 0,
+        contracts: 0,
+        latestSnapshot: '',
+        latestSortDate: 0,
+        directions: []
+      };
+    }
+
+    const profile = profiles[code];
+    const university = String(
+      valueFromRow_(row, header.map, 'Вуз', '')
+    );
+
+    const basis = String(
+      valueFromRow_(row, header.map, 'Основа', '')
+    );
+
+    const group = String(
+      valueFromRow_(
+        row,
+        header.map,
+        'Конкурсная группа',
+        ''
+      )
+    );
+
+    const priority = apiNumber_(
+      valueFromRow_(
+        row,
+        header.map,
+        'Приоритет',
+        null
+      )
+    );
+
+    const score = apiNumber_(
+      valueFromRow_(row, header.map, 'Балл', null)
+    );
+
+    const sortDate = apiNumber_(
+      valueFromRow_(
+        row,
+        header.map,
+        'Метка времени списка',
+        0
+      )
+    ) || 0;
+
+    profile.universities[university] = true;
+    profile.applications++;
+
+    if (basis === 'Бюджет') {
+      profile.budget++;
+    }
+
+    if (basis === 'Платное') {
+      profile.paid++;
+    }
+
+    if (
+      priority !== null &&
+      (
+        profile.minPriority === null ||
+        priority < profile.minPriority
+      )
+    ) {
+      profile.minPriority = priority;
+    }
+
+    if (
+      score !== null &&
+      (
+        profile.maxScore === null ||
+        score > profile.maxScore
+      )
+    ) {
+      profile.maxScore = score;
+    }
+
+    if (
+      basis === 'Бюджет' &&
+      normalize_(
+        valueFromRow_(
+          row,
+          header.map,
+          'Согласие подано',
+          ''
+        )
+      ) === 'да'
+    ) {
+      profile.consents++;
+    }
+
+    if (
+      basis === 'Платное' &&
+      normalize_(
+        valueFromRow_(
+          row,
+          header.map,
+          'Договор заключён',
+          ''
+        )
+      ) === 'да'
+    ) {
+      profile.contracts++;
+    }
+
+    if (sortDate >= profile.latestSortDate) {
+      profile.latestSortDate = sortDate;
+      profile.latestSnapshot = displayDateValue_(
+        valueFromRow_(
+          row,
+          header.map,
+          'Дата списка',
+          ''
+        )
+      );
+    }
+
+    profile.directions.push(
+      university +
+      ' · ' +
+      basis +
+      ' · ' +
+      group +
+      (
+        priority === null
+          ? ''
+          : ' · приоритет ' + priority
+      )
+    );
+  }
+
+  const rows = Object.keys(profiles)
+    .sort(function (first, second) {
+      return first.localeCompare(second);
+    })
+    .map(function (code) {
+      const profile = profiles[code];
+      const universities = Object.keys(
+        profile.universities
+      ).sort();
+
+      return {
+        'Код поступающего': code,
+        'Ключ профиля': profile.profileKey,
+        'Код для показа': maskApplicantCode_(code),
+        'Количество вузов': universities.length,
+        'Количество заявлений': profile.applications,
+        'Бюджетных заявлений': profile.budget,
+        'Платных заявлений': profile.paid,
+        'Лучший приоритет': valueOrBlank_(
+          profile.minPriority
+        ),
+        'Максимальный балл': valueOrBlank_(
+          profile.maxScore
+        ),
+        'Поданных согласий': profile.consents,
+        'Заключённых договоров': profile.contracts,
+        'Вузы': universities.join(' · '),
+        'Направления и приоритеты':
+          profile.directions.join('\n'),
+        'Последний список': profile.latestSnapshot,
+        'Метка последнего списка': profile.latestSortDate,
+        'Время обновления': formatDateTime_(new Date())
+      };
+    });
+
+  writeObjectsToSheet_(
+    profilesSheet,
+    applicantProfileHeaders_(),
+    rows,
+    true
+  );
+}
+
+
+function buildApplicantsPayload_(params) {
+  params = params || {};
+
+  const ss = SpreadsheetApp.openById(
+    CFG.spreadsheetId
+  );
+
+  const sheet = ss.getSheetByName(
+    CFG.sheets.applicants
+  );
+
+  const limit = Math.max(
+    1,
+    Math.min(
+      200,
+      Math.floor(numberOrNull_(params.limit) || 100)
+    )
+  );
+
+  const offset = Math.max(
+    0,
+    Math.floor(numberOrNull_(params.offset) || 0)
+  );
+
+  const university = String(
+    params.university || ''
+  ).trim();
+
+  const basis = String(
+    params.basis || ''
+  ).trim();
+
+  const confirmation = String(
+    params.confirmation || ''
+  ).trim();
+
+  const direction = normalize_(
+    params.direction || ''
+  );
+
+  const priority = apiNumber_(
+    params.priority || ''
+  );
+
+  const exactCode = normalizeParticipantId_(
+    params.query || ''
+  );
+
+  const payload = {
+    generatedAt: new Date().toISOString(),
+    summary: {
+      applicantsCount: 0,
+      applicationsCount: 0,
+      crossUniversityCount: 0,
+      withConsentCount: 0,
+      withContractCount: 0,
+      consentsCount: 0,
+      contractsCount: 0,
+      universities: [],
+      latestSnapshot: ''
+    },
+    total: 0,
+    offset: offset,
+    limit: limit,
+    items: []
+  };
+
+  if (!sheet || sheet.getLastRow() < 2) {
+    return payload;
+  }
+
+  const header = headers_(sheet).map;
+  const data = sheet.getDataRange().getValues();
+  const items = [];
+  const allUniversities = {};
+  let latestSnapshot = '';
+  let latestTimestamp = 0;
+
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    const code = String(
+      valueFromRow_(
+        row,
+        header,
+        'Код поступающего',
+        ''
+      )
+    ).trim();
+
+    const universities = String(
+      valueFromRow_(row, header, 'Вузы', '')
+    );
+
+    const universityItems = universities
+      ? universities.split(' · ')
+      : [];
+
+    const directions = String(
+      valueFromRow_(
+        row,
+        header,
+        'Направления и приоритеты',
+        ''
+      )
+    );
+
+    const budgetCount = apiNumber_(
+      valueFromRow_(
+        row,
+        header,
+        'Бюджетных заявлений',
+        0
+      )
+    ) || 0;
+
+    const paidCount = apiNumber_(
+      valueFromRow_(
+        row,
+        header,
+        'Платных заявлений',
+        0
+      )
+    ) || 0;
+
+    const consents = apiNumber_(
+      valueFromRow_(
+        row,
+        header,
+        'Поданных согласий',
+        0
+      )
+    ) || 0;
+
+    const contracts = apiNumber_(
+      valueFromRow_(
+        row,
+        header,
+        'Заключённых договоров',
+        0
+      )
+    ) || 0;
+
+    const applicationsCount = apiNumber_(
+      valueFromRow_(
+        row,
+        header,
+        'Количество заявлений',
+        0
+      )
+    ) || 0;
+
+    const universitiesCount = apiNumber_(
+      valueFromRow_(
+        row,
+        header,
+        'Количество вузов',
+        0
+      )
+    ) || 0;
+
+    const rowSnapshot = displayDateValue_(
+      valueFromRow_(row, header, 'Последний список', '')
+    );
+
+    const rowTimestamp = apiNumber_(
+      valueFromRow_(
+        row,
+        header,
+        'Метка последнего списка',
+        0
+      )
+    ) || 0;
+
+    payload.summary.applicantsCount++;
+    payload.summary.applicationsCount += applicationsCount;
+    payload.summary.consentsCount += consents;
+    payload.summary.contractsCount += contracts;
+
+    if (universitiesCount > 1) {
+      payload.summary.crossUniversityCount++;
+    }
+
+    if (consents > 0) {
+      payload.summary.withConsentCount++;
+    }
+
+    if (contracts > 0) {
+      payload.summary.withContractCount++;
+    }
+
+    universityItems.forEach(function (name) {
+      if (name) {
+        allUniversities[name] = true;
+      }
+    });
+
+    if (rowTimestamp >= latestTimestamp) {
+      latestTimestamp = rowTimestamp;
+      latestSnapshot = rowSnapshot;
+    }
+
+    if (exactCode && code !== exactCode) {
+      continue;
+    }
+
+    if (
+      university &&
+      universityItems.indexOf(university) === -1
+    ) {
+      continue;
+    }
+
+    if (
+      direction &&
+      normalize_(directions).indexOf(direction) === -1
+    ) {
+      continue;
+    }
+
+    if (
+      priority !== null &&
+      directions.split('\n').every(function (item) {
+        return item.indexOf(
+          ' · приоритет ' + priority
+        ) === -1;
+      })
+    ) {
+      continue;
+    }
+
+    if (basis === 'Бюджет' && budgetCount === 0) {
+      continue;
+    }
+
+    if (basis === 'Платное' && paidCount === 0) {
+      continue;
+    }
+
+    if (confirmation === 'consent' && consents === 0) {
+      continue;
+    }
+
+    if (confirmation === 'contract' && contracts === 0) {
+      continue;
+    }
+
+    if (
+      confirmation === 'any' &&
+      consents === 0 &&
+      contracts === 0
+    ) {
+      continue;
+    }
+
+    items.push({
+      profileKey: String(
+        valueFromRow_(
+          row,
+          header,
+          'Ключ профиля',
+          ''
+        )
+      ),
+      applicantCode: maskApplicantCode_(code),
+      universitiesCount: universitiesCount,
+      applicationsCount: applicationsCount,
+      budgetCount: budgetCount,
+      paidCount: paidCount,
+      bestPriority: apiNumber_(
+        valueFromRow_(
+          row,
+          header,
+          'Лучший приоритет',
+          null
+        )
+      ),
+      maxScore: apiNumber_(
+        valueFromRow_(
+          row,
+          header,
+          'Максимальный балл',
+          null
+        )
+      ),
+      consentsCount: consents,
+      contractsCount: contracts,
+      universities: universityItems,
+      latestSnapshot: rowSnapshot
+    });
+  }
+
+  payload.summary.universities = Object.keys(
+    allUniversities
+  ).sort();
+  payload.summary.latestSnapshot = latestSnapshot;
+  payload.total = items.length;
+  payload.items = items.slice(offset, offset + limit);
+
+  return payload;
+}
+
+
+function buildApplicantProfilePayload_(params) {
+  params = params || {};
+
+  const ss = SpreadsheetApp.openById(
+    CFG.spreadsheetId
+  );
+
+  const exactCode = normalizeParticipantId_(
+    params.applicantId || ''
+  );
+
+  const profileKey = String(
+    params.profileKey || ''
+  ).trim();
+
+  const resolvedCode = exactCode ||
+    findApplicantCodeByProfileKey_(ss, profileKey);
+
+  const payload = {
+    generatedAt: new Date().toISOString(),
+    found: false,
+    applicantCode: '',
+    profileKey: profileKey,
+    summary: null,
+    applications: []
+  };
+
+  if (!resolvedCode) {
+    return payload;
+  }
+
+  const sheet = ss.getSheetByName(
+    CFG.sheets.allApplications
+  );
+
+  if (!sheet || sheet.getLastRow() < 2) {
+    return payload;
+  }
+
+  const header = headers_(sheet).map;
+  const data = sheet.getDataRange().getValues();
+  const applications = [];
+
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    const code = String(
+      valueFromRow_(
+        row,
+        header,
+        'Код поступающего',
+        ''
+      )
+    ).trim();
+
+    if (code !== resolvedCode) {
+      continue;
+    }
+
+    applications.push({
+      groupId: String(
+        valueFromRow_(row, header, 'ID группы', '')
+      ),
+      university: String(
+        valueFromRow_(row, header, 'Вуз', '')
+      ),
+      basis: String(
+        valueFromRow_(row, header, 'Основа', '')
+      ),
+      group: String(
+        valueFromRow_(
+          row,
+          header,
+          'Конкурсная группа',
+          ''
+        )
+      ),
+      priority: apiNumber_(
+        valueFromRow_(
+          row,
+          header,
+          'Приоритет',
+          null
+        )
+      ),
+      score: apiNumber_(
+        valueFromRow_(row, header, 'Балл', null)
+      ),
+      generalPosition: apiNumber_(
+        valueFromRow_(
+          row,
+          header,
+          'Общая позиция',
+          null
+        )
+      ),
+      status: String(
+        valueFromRow_(row, header, 'Статус', '')
+      ),
+      consent: String(
+        valueFromRow_(row, header, 'Согласие', '')
+      ),
+      hasConsent:
+        normalize_(
+          valueFromRow_(
+            row,
+            header,
+            'Согласие подано',
+            ''
+          )
+        ) === 'да',
+      consentRank: apiNumber_(
+        valueFromRow_(
+          row,
+          header,
+          'Позиция по согласию',
+          null
+        )
+      ),
+      contract: String(
+        valueFromRow_(row, header, 'Договор', '')
+      ),
+      hasContract:
+        normalize_(
+          valueFromRow_(
+            row,
+            header,
+            'Договор заключён',
+            ''
+          )
+        ) === 'да',
+      contractRank: apiNumber_(
+        valueFromRow_(
+          row,
+          header,
+          'Позиция по договору',
+          null
+        )
+      ),
+      seats: apiNumber_(
+        valueFromRow_(row, header, 'Мест', null)
+      ),
+      snapshot: displayDateValue_(
+        valueFromRow_(
+          row,
+          header,
+          'Дата списка',
+          ''
+        )
+      )
+    });
+  }
+
+  applications.sort(function (first, second) {
+    return first.university.localeCompare(second.university) ||
+      first.basis.localeCompare(second.basis) ||
+      (first.priority || 999) - (second.priority || 999) ||
+      first.group.localeCompare(second.group);
+  });
+
+  if (!applications.length) {
+    return payload;
+  }
+
+  const universities = {};
+  let consents = 0;
+  let contracts = 0;
+
+  applications.forEach(function (item) {
+    universities[item.university] = true;
+
+    if (item.hasConsent && item.basis === 'Бюджет') {
+      consents++;
+    }
+
+    if (item.hasContract && item.basis === 'Платное') {
+      contracts++;
+    }
+  });
+
+  payload.found = true;
+  payload.applicantCode = exactCode
+    ? resolvedCode
+    : maskApplicantCode_(resolvedCode);
+  payload.profileKey = makeApplicantProfileKey_(resolvedCode);
+  payload.summary = {
+    universitiesCount: Object.keys(universities).length,
+    applicationsCount: applications.length,
+    consentsCount: consents,
+    contractsCount: contracts
+  };
+  payload.applications = applications;
+
+  return payload;
+}
+
+
+function findApplicantCodeByProfileKey_(ss, profileKey) {
+  if (!profileKey) {
+    return '';
+  }
+
+  const sheet = ss.getSheetByName(
+    CFG.sheets.applicants
+  );
+
+  if (!sheet || sheet.getLastRow() < 2) {
+    return '';
+  }
+
+  const header = headers_(sheet);
+  const keyColumn = header.map['Ключ профиля'];
+  const codeColumn = header.map['Код поступающего'];
+
+  if (
+    keyColumn === undefined ||
+    codeColumn === undefined
+  ) {
+    return '';
+  }
+
+  const match = sheet
+    .getRange(
+      2,
+      keyColumn + 1,
+      sheet.getLastRow() - 1,
+      1
+    )
+    .createTextFinder(profileKey)
+    .matchEntireCell(true)
+    .findNext();
+
+  if (!match) {
+    return '';
+  }
+
+  return String(
+    sheet.getRange(
+      match.getRow(),
+      codeColumn + 1
+    ).getValue() || ''
+  ).trim();
+}
+
+
+function makeApplicantProfileKey_(code) {
+  const props = PropertiesService.getScriptProperties();
+  let salt = props.getProperty('APPLICANT_PROFILE_SALT');
+
+  if (!salt) {
+    salt = Utilities.getUuid() + Utilities.getUuid();
+    props.setProperty('APPLICANT_PROFILE_SALT', salt);
+  }
+
+  const bytes = Utilities.computeHmacSha256Signature(
+    String(code || ''),
+    salt,
+    Utilities.Charset.UTF_8
+  );
+
+  return bytes
+    .slice(0, 16)
+    .map(function (byte) {
+      const value = (byte + 256) % 256;
+      return ('0' + value.toString(16)).slice(-2);
+    })
+    .join('');
+}
+
+
+function maskApplicantCode_(code) {
+  const value = String(code || '').trim();
+
+  if (value.length <= 4) {
+    return value.replace(/.(?=..)/g, '*');
+  }
+
+  return (
+    value.slice(0, 3) +
+    '*'.repeat(Math.max(3, value.length - 5)) +
+    value.slice(-2)
+  );
+}
+
+
+function compareApplicationObjects_(first, second) {
+  return String(first['Код поступающего'] || '')
+    .localeCompare(
+      String(second['Код поступающего'] || '')
+    ) ||
+    String(first['Вуз'] || '')
+      .localeCompare(String(second['Вуз'] || '')) ||
+    String(first['Основа'] || '')
+      .localeCompare(String(second['Основа'] || '')) ||
+    (numberOrNull_(first['Приоритет']) || 999) -
+      (numberOrNull_(second['Приоритет']) || 999) ||
+    String(first['Конкурсная группа'] || '')
+      .localeCompare(
+        String(second['Конкурсная группа'] || '')
+      );
+}
+
+
+function applicationMapHeaders_() {
+  return [
+    'Код поступающего',
+    'Ключ профиля',
+    'Код для показа',
+    'ID группы',
+    'Вуз',
+    'Основа',
+    'Конкурсная группа',
+    'Приоритет',
+    'Балл',
+    'Общая позиция',
+    'Статус',
+    'Согласие',
+    'Согласие подано',
+    'Позиция по согласию',
+    'Договор',
+    'Договор заключён',
+    'Позиция по договору',
+    'Мест',
+    'Дата списка',
+    'Метка времени списка',
+    'ID файла Drive',
+    'Файл',
+    'Путь к файлу',
+    'Хеш CSV',
+    'Время обработки'
+  ];
+}
+
+
+function applicantProfileHeaders_() {
+  return [
+    'Код поступающего',
+    'Ключ профиля',
+    'Код для показа',
+    'Количество вузов',
+    'Количество заявлений',
+    'Бюджетных заявлений',
+    'Платных заявлений',
+    'Лучший приоритет',
+    'Максимальный балл',
+    'Поданных согласий',
+    'Заключённых договоров',
+    'Вузы',
+    'Направления и приоритеты',
+    'Последний список',
+    'Метка последнего списка',
+    'Время обновления'
+  ];
+}
+
+
+function getOrCreateAnalysisSheet_(ss, name, hidden) {
+  let sheet = ss.getSheetByName(name);
+
+  if (!sheet) {
+    sheet = ss.insertSheet(name);
+  }
+
+  if (hidden && !sheet.isSheetHidden()) {
+    sheet.hideSheet();
+  }
+
+  if (!hidden && sheet.isSheetHidden()) {
+    sheet.showSheet();
+  }
+
+  return sheet;
+}
+
+
+function clearDataRows_(sheet) {
+  if (sheet.getLastRow() > 1) {
+    sheet
+      .getRange(
+        2,
+        1,
+        sheet.getLastRow() - 1,
+        Math.max(1, sheet.getLastColumn())
+      )
+      .clearContent();
+  }
+}
+
+
+function rowToObject_(row, headerNames) {
+  const result = {};
+
+  headerNames.forEach(function (name, index) {
+    if (name) {
+      result[name] = row[index];
+    }
+  });
+
+  return result;
+}
+
+
+function writeObjectsToSheet_(
+  sheet,
+  headerNames,
+  objects,
+  addFilter
+) {
+  const values = [headerNames].concat(
+    objects.map(function (item) {
+      return headerNames.map(function (name) {
+        return Object.prototype.hasOwnProperty.call(
+          item,
+          name
+        )
+          ? item[name]
+          : '';
+      });
+    })
+  );
+
+  ensureSheetCapacity_(
+    sheet,
+    values.length,
+    headerNames.length
+  );
+
+  const filter = sheet.getFilter();
+
+  if (filter) {
+    filter.remove();
+  }
+
+  sheet.getDataRange().clearContent();
+
+  sheet
+    .getRange(
+      1,
+      1,
+      values.length,
+      headerNames.length
+    )
+    .setValues(values);
+
+  sheet
+    .getRange(1, 1, 1, headerNames.length)
+    .setFontWeight('bold')
+    .setBackground('#EAF0F5')
+    .setWrap(true);
+
+  sheet.setFrozenRows(1);
+
+  if (addFilter && values.length > 1) {
+    sheet
+      .getRange(
+        1,
+        1,
+        values.length,
+        headerNames.length
+      )
+      .createFilter();
+  }
+}
+
+
+function ensureSheetCapacity_(sheet, rows, columns) {
+  if (sheet.getMaxRows() < rows) {
+    sheet.insertRowsAfter(
+      sheet.getMaxRows(),
+      rows - sheet.getMaxRows()
+    );
+  }
+
+  if (sheet.getMaxColumns() < columns) {
+    sheet.insertColumnsAfter(
+      sheet.getMaxColumns(),
+      columns - sheet.getMaxColumns()
+    );
+  }
+}
+
+
+/* =========================================================
    БЕЗОПАСНЫЙ ПАРСЕР CSV
    ========================================================= */
 
@@ -3861,6 +5580,21 @@ function ensureSchemas_(ss) {
   const journal = ss.getSheetByName(CFG.sheets.journal);
   const state = getOrCreateStateSheet_(ss);
   const plan = ss.getSheetByName(CFG.sheets.plan);
+  const allApplications = getOrCreateAnalysisSheet_(
+    ss,
+    CFG.sheets.allApplications,
+    false
+  );
+  const applicants = getOrCreateAnalysisSheet_(
+    ss,
+    CFG.sheets.applicants,
+    false
+  );
+  const applicationsStaging = getOrCreateAnalysisSheet_(
+    ss,
+    CFG.sheets.applicationsStaging,
+    true
+  );
 
   ensureHeaders_(registry, [
     'Приоритет',
@@ -3962,6 +5696,21 @@ function ensureSchemas_(ss) {
     'Количество участников в предыдущем снимке',
     'Время расчёта'
   ]);
+
+  ensureHeaders_(
+    allApplications,
+    applicationMapHeaders_()
+  );
+
+  ensureHeaders_(
+    applicationsStaging,
+    applicationMapHeaders_()
+  );
+
+  ensureHeaders_(
+    applicants,
+    applicantProfileHeaders_()
+  );
 
   if (plan) {
     ensureHeaders_(plan, [

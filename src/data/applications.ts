@@ -98,6 +98,85 @@ export type ChangesFilters = {
   limit?: number;
 };
 
+export type ApplicantsFilters = {
+  university?: string;
+  basis?: Basis;
+  confirmation?: "consent" | "contract" | "any";
+  direction?: string;
+  priority?: number;
+  offset?: number;
+  limit?: number;
+};
+
+export interface ApplicantsSummary {
+  applicantsCount: number;
+  applicationsCount: number;
+  crossUniversityCount: number;
+  withConsentCount: number;
+  withContractCount: number;
+  consentsCount: number;
+  contractsCount: number;
+  universities: string[];
+  latestSnapshot: string;
+}
+
+export interface ApplicantListItem {
+  profileKey: string;
+  applicantCode: string;
+  universitiesCount: number;
+  applicationsCount: number;
+  budgetCount: number;
+  paidCount: number;
+  bestPriority: number | null;
+  maxScore: number | null;
+  consentsCount: number;
+  contractsCount: number;
+  universities: string[];
+  latestSnapshot: string;
+}
+
+export interface ApplicantsData {
+  generatedAt: string;
+  summary: ApplicantsSummary;
+  total: number;
+  offset: number;
+  limit: number;
+  items: ApplicantListItem[];
+}
+
+export interface ApplicantApplication {
+  groupId: string;
+  university: string;
+  basis: Basis;
+  group: string;
+  priority: number | null;
+  score: number | null;
+  generalPosition: number | null;
+  status: string;
+  consent: string;
+  hasConsent: boolean;
+  consentRank: number | null;
+  contract: string;
+  hasContract: boolean;
+  contractRank: number | null;
+  seats: number | null;
+  snapshot: string;
+}
+
+export interface ApplicantProfileData {
+  generatedAt: string;
+  found: boolean;
+  applicantCode: string;
+  profileKey: string;
+  summary: {
+    universitiesCount: number;
+    applicationsCount: number;
+    consentsCount: number;
+    contractsCount: number;
+  } | null;
+  applications: ApplicantApplication[];
+}
+
 export interface CoverageEntry {
   university: string;
   received: number;
@@ -219,6 +298,24 @@ type ApiChangesPayload = {
     basis?: string;
   };
   items: ApiChangeItem[];
+};
+
+type ApiApplicantsPayload = {
+  generatedAt?: string;
+  summary?: Partial<ApplicantsSummary>;
+  total?: ApiNumber;
+  offset?: ApiNumber;
+  limit?: ApiNumber;
+  items?: Array<Partial<ApplicantListItem>>;
+};
+
+type ApiApplicantProfilePayload = {
+  generatedAt?: string;
+  found?: boolean;
+  applicantCode?: string;
+  profileKey?: string;
+  summary?: ApplicantProfileData["summary"];
+  applications?: Array<Partial<ApplicantApplication> & { basis?: string }>;
 };
 
 const DEFAULT_GAS_ENDPOINT = [
@@ -423,6 +520,105 @@ export async function getChanges(filters: ChangesFilters = {}): Promise<ChangesD
       basis: payload.filters?.basis || "",
     },
     items: payload.items.map(mapChangeItem),
+  };
+}
+
+export async function getApplicants(filters: ApplicantsFilters = {}): Promise<ApplicantsData> {
+  const payload = await requestJson<ApiApplicantsPayload>(endpointUrl({
+    action: "applicants",
+    university: filters.university,
+    basis: filters.basis,
+    confirmation: filters.confirmation,
+    direction: filters.direction,
+    priority: filters.priority ? String(filters.priority) : undefined,
+    offset: String(filters.offset ?? 0),
+    limit: String(filters.limit ?? 100),
+  }));
+
+  if (!payload || !payload.summary || !Array.isArray(payload.items)) {
+    throw new Error("API не вернул карту поступающих.");
+  }
+
+  const summary: ApplicantsSummary = {
+    applicantsCount: toNullableNumber(payload.summary.applicantsCount) ?? 0,
+    applicationsCount: toNullableNumber(payload.summary.applicationsCount) ?? 0,
+    crossUniversityCount: toNullableNumber(payload.summary.crossUniversityCount) ?? 0,
+    withConsentCount: toNullableNumber(payload.summary.withConsentCount) ?? 0,
+    withContractCount: toNullableNumber(payload.summary.withContractCount) ?? 0,
+    consentsCount: toNullableNumber(payload.summary.consentsCount) ?? 0,
+    contractsCount: toNullableNumber(payload.summary.contractsCount) ?? 0,
+    universities: Array.isArray(payload.summary.universities) ? payload.summary.universities.map(String) : [],
+    latestSnapshot: String(payload.summary.latestSnapshot || ""),
+  };
+
+  return {
+    generatedAt: payload.generatedAt || "",
+    summary,
+    total: toNullableNumber(payload.total) ?? 0,
+    offset: toNullableNumber(payload.offset) ?? 0,
+    limit: toNullableNumber(payload.limit) ?? (filters.limit ?? 100),
+    items: payload.items.map((item) => ({
+      profileKey: String(item.profileKey || ""),
+      applicantCode: String(item.applicantCode || ""),
+      universitiesCount: toNullableNumber(item.universitiesCount) ?? 0,
+      applicationsCount: toNullableNumber(item.applicationsCount) ?? 0,
+      budgetCount: toNullableNumber(item.budgetCount) ?? 0,
+      paidCount: toNullableNumber(item.paidCount) ?? 0,
+      bestPriority: toNullableNumber(item.bestPriority),
+      maxScore: toNullableNumber(item.maxScore),
+      consentsCount: toNullableNumber(item.consentsCount) ?? 0,
+      contractsCount: toNullableNumber(item.contractsCount) ?? 0,
+      universities: Array.isArray(item.universities) ? item.universities.map(String) : [],
+      latestSnapshot: String(item.latestSnapshot || ""),
+    })),
+  };
+}
+
+export async function getApplicantProfile(params: {
+  profileKey?: string;
+  applicantId?: string;
+}): Promise<ApplicantProfileData> {
+  const payload = await requestJson<ApiApplicantProfilePayload>(endpointUrl({
+    action: "applicant",
+    profileKey: params.profileKey,
+    applicantId: params.applicantId,
+  }));
+
+  if (!payload || !Array.isArray(payload.applications)) {
+    throw new Error("API не вернул карточку поступающего.");
+  }
+
+  return {
+    generatedAt: payload.generatedAt || "",
+    found: Boolean(payload.found),
+    applicantCode: String(payload.applicantCode || ""),
+    profileKey: String(payload.profileKey || ""),
+    summary: payload.summary
+      ? {
+          universitiesCount: toNullableNumber(payload.summary.universitiesCount) ?? 0,
+          applicationsCount: toNullableNumber(payload.summary.applicationsCount) ?? 0,
+          consentsCount: toNullableNumber(payload.summary.consentsCount) ?? 0,
+          contractsCount: toNullableNumber(payload.summary.contractsCount) ?? 0,
+        }
+      : null,
+    applications: payload.applications.map((item) => ({
+      groupId: String(item.groupId || ""),
+      university: String(item.university || ""),
+      basis: toBasis(String(item.basis || "")),
+      group: String(item.group || "Без названия направления"),
+      priority: toNullableNumber(item.priority),
+      score: toNullableNumber(item.score),
+      generalPosition: toNullableNumber(item.generalPosition),
+      status: String(item.status || "Нет данных"),
+      consent: String(item.consent || "Не опубликовано"),
+      hasConsent: Boolean(item.hasConsent),
+      consentRank: toNullableNumber(item.consentRank),
+      contract: String(item.contract || "Не опубликовано"),
+      hasContract: Boolean(item.hasContract),
+      contractRank: toNullableNumber(item.contractRank),
+      seats: toNullableNumber(item.seats),
+      snapshot: String(item.snapshot || "Нет даты списка"),
+    })),
   };
 }
 

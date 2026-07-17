@@ -189,6 +189,7 @@ const Changes = () => {
             </div>
             <div className="flex flex-col items-start md:items-end gap-2 text-sm">
               <Link to="/" className="underline underline-offset-4 opacity-90 hover:opacity-100">Вернуться к текущей ситуации</Link>
+              <Link to="/applicants" className="underline underline-offset-4 opacity-90 hover:opacity-100">Карта поступающих</Link>
               <Link to="/dynamics" className="underline underline-offset-4 opacity-90 hover:opacity-100">Полная динамика позиций</Link>
             </div>
           </div>
