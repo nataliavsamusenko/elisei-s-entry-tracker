@@ -40,8 +40,8 @@ function onOpen() {
     .addItem('Дозаполнить текущие CSV', 'backfillCurrentLists')
     .addItem('Пересчитать изменения списков', 'backfillChangeMetrics')
     .addSeparator()
-    .addItem('Начать сбор карты поступающих', 'startApplicantsRebuild')
-    .addItem('Продолжить сбор карты поступающих', 'continueApplicantsRebuild')
+    .addItem('Продолжить или начать сбор карты поступающих', 'startApplicantsRebuild')
+    .addItem('Начать сбор заново (очистить прогресс)', 'restartApplicantsRebuild')
     .addSeparator()
     .addItem('Включить обновление раз в час', 'createAutomaticUpdateTrigger')
     .addItem('Выключить обновление раз в час', 'deleteAutomaticUpdateTrigger')
@@ -3233,6 +3233,62 @@ const APPLICANTS_REBUILD_RESTART_PROPERTY =
  * Рабочие данные заменяются только после обработки всей очереди.
  */
 function startApplicantsRebuild() {
+  runApplicantsRebuildResume_(true);
+}
+
+
+function runApplicantsRebuildResume_(showToast) {
+  removeApplicantRebuildTriggers_();
+
+  const lock = LockService.getScriptLock();
+
+  if (!lock.tryLock(5000)) {
+    createApplicantRebuildTrigger_();
+
+    if (showToast) {
+      SpreadsheetApp.openById(CFG.spreadsheetId).toast(
+        'Текущий этап ещё выполняется. Продолжение сохранённой сборки поставлено в очередь.',
+        'Карта поступающих',
+        15
+      );
+    }
+
+    return;
+  }
+
+  try {
+    const ss = SpreadsheetApp.openById(
+      CFG.spreadsheetId
+    );
+
+    ensureSchemas_(ss);
+
+    const props = PropertiesService.getScriptProperties();
+
+    if (
+      !props.getProperty(
+        APPLICANTS_REBUILD_QUEUE_PROPERTY
+      )
+    ) {
+      initializeApplicantsRebuild_(ss);
+    }
+
+    const progress = continueApplicantsRebuildBatch_(ss);
+
+    if (showToast) {
+      ss.toast(
+        applicantRebuildProgressMessage_(progress),
+        'Карта поступающих',
+        15
+      );
+    }
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+
+function restartApplicantsRebuild() {
   const props = PropertiesService.getScriptProperties();
 
   props.setProperty(
