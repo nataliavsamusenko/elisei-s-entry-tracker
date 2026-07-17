@@ -21,7 +21,7 @@ import {
   getAdmissionControl,
   getDecision,
 } from "@/data/admission-control";
-import { hasBudgetConsent, hasPaidContract } from "@/data/applications";
+
 
 
 type ControlledApplication = {
