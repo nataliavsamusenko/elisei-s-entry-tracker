@@ -432,3 +432,19 @@ export function buildAnalyticalPhrase(app: Application): string {
     ? `Выше ${above} абитуриентов. Для точной оценки нужны квота и число абитуриентов выше с подтверждённым согласием.`
     : `Выше ${above} абитуриентов. Для точной оценки нужны договорные места и количество договоров выше по списку.`;
 }
+
+function normalizeConfirmation(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+export function hasBudgetConsent(app: Application): boolean {
+  if (app.basis !== "Бюджет") return false;
+  const v = normalizeConfirmation(app.consentRaw);
+  return v === "электронное" || v === "бумажное";
+}
+
+export function hasPaidContract(app: Application): boolean {
+  if (app.basis !== "Платное") return false;
+  return normalizeConfirmation(app.contractRaw) === "да";
+}
+
