@@ -12,6 +12,27 @@ import { defineMcp } from "npm:@lovable.dev/mcp-js@0.20.0";
 import { defineTool } from "npm:@lovable.dev/mcp-js@0.20.0";
 
 // src/data/applications.ts
+var DEFAULT_GAS_ENDPOINT = [
+  "https://script.google.com/macros/s/",
+  "AKfycbz3f91C_J50XFzmtSDx-TT7qhNb_1V88BYexp82B6upiyJB1L7iLXprvVAIrkPYNgZxqg",
+  "/exec"
+].join("");
+function endpointUrl(params) {
+  const base = define_import_meta_env_default.VITE_GAS_ENDPOINT || DEFAULT_GAS_ENDPOINT;
+  if (!params) return base;
+  const query = new URLSearchParams();
+  if (typeof params === "string") {
+    query.set("groupId", params);
+  } else {
+    Object.entries(params).forEach(([key, value]) => {
+      if (value) query.set(key, value);
+    });
+  }
+  const search = query.toString();
+  if (!search) return base;
+  const divider = base.includes("?") ? "&" : "?";
+  return `${base}${divider}${search}`;
+}
 function toNumber(value, field, app) {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   throw new Error(`\u0412 API \u043D\u0435\u0442 \u0447\u0438\u0441\u043B\u043E\u0432\u043E\u0433\u043E \u043F\u043E\u043B\u044F \xAB${field}\xBB \u0434\u043B\u044F \u0433\u0440\u0443\u043F\u043F\u044B \xAB${app.group}\xBB (${app.id}).`);
@@ -19,19 +40,29 @@ function toNumber(value, field, app) {
 function toNullableNumber(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
+function toHigherPriorityCount(value, priority) {
+  const count = toNullableNumber(value);
+  if (count !== null) return count;
+  return priority <= 1 ? 0 : null;
+}
 function toBasis(value) {
   if (value === "\u0411\u044E\u0434\u0436\u0435\u0442" || value === "\u041F\u043B\u0430\u0442\u043D\u043E\u0435") return value;
   throw new Error(`\u041D\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043D\u0430\u044F \u043E\u0441\u043D\u043E\u0432\u0430 \u043F\u043E\u0441\u0442\u0443\u043F\u043B\u0435\u043D\u0438\u044F \u0432 API: \xAB${value}\xBB.`);
 }
+function formatSemesterFee(value) {
+  if (!value) return null;
+  return value.includes("\u20BD") ? value : `${value} \u20BD`;
+}
 function mapApplication(app) {
   const basis = toBasis(app.basis);
+  const priority = toNumber(app.priority, "\u041F\u0440\u0438\u043E\u0440\u0438\u0442\u0435\u0442", app);
   const confirmation = basis === "\u0411\u044E\u0434\u0436\u0435\u0442" ? `\u0421\u043E\u0433\u043B\u0430\u0441\u0438\u0435: ${app.consent || "\u2014"}` : `\u0414\u043E\u0433\u043E\u0432\u043E\u0440: ${app.contract || "\u2014"}`;
   return {
     id: String(app.id),
     university: app.university,
     basis,
     group: app.group,
-    priority: toNumber(app.priority, "\u041F\u0440\u0438\u043E\u0440\u0438\u0442\u0435\u0442", app),
+    priority,
     score: toNumber(app.score, "\u0411\u0430\u043B\u043B \u0415\u043B\u0438\u0441\u0435\u044F", app),
     scoreBreakdown: "",
     position: toNumber(app.generalPosition, "\u041F\u043E\u0437\u0438\u0446\u0438\u044F \u043E\u0431\u0449\u0430\u044F", app),
@@ -40,32 +71,35 @@ function mapApplication(app) {
     snapshot: app.snapshot || "\u041D\u0435\u0442 \u0434\u0430\u0442\u044B \u0441\u043F\u0438\u0441\u043A\u0430",
     control: {
       seats: toNullableNumber(app.seats),
-      semesterFeeText: app.semesterFeeText ?? null,
+      semesterFeeText: formatSemesterFee(app.semesterFeeText),
       contractsCount: toNullableNumber(app.contractsCount),
       contractsAbove: toNullableNumber(app.contractsAbove),
+      contractsAboveHigherPriority: toHigherPriorityCount(app.contractsAboveHigherPriority, priority),
       consentsCount: toNullableNumber(app.consentsCount),
       consentsAbove: toNullableNumber(app.consentsAbove),
+      consentsAboveHigherPriority: toHigherPriorityCount(app.consentsAboveHigherPriority, priority),
       contractRank: toNullableNumber(app.contractRank),
       consentRank: toNullableNumber(app.consentRank),
-      sourceNote: app.activeSource || "\u041F\u0440\u0435\u0434\u0432\u0430\u0440\u0438\u0442\u0435\u043B\u044C\u043D\u043E \u043F\u043E \u043E\u0431\u0449\u0435\u0439 \u043F\u043E\u0437\u0438\u0446\u0438\u0438"
+      sourceNote: app.sourceNote || app.activeSource || "\u041F\u0440\u0435\u0434\u0432\u0430\u0440\u0438\u0442\u0435\u043B\u044C\u043D\u043E \u043F\u043E \u043E\u0431\u0449\u0435\u0439 \u043F\u043E\u0437\u0438\u0446\u0438\u0438",
+      dataReadiness: app.dataReadiness || "\u0414\u0430\u043D\u043D\u044B\u0435 \u043F\u0440\u043E\u0432\u0435\u0440\u044F\u044E\u0442\u0441\u044F",
+      needsClarification: Boolean(app.needsClarification)
     },
-    generalChange: app.generalChange || "\u041D\u0435\u0442 \u043F\u0440\u0435\u0434\u044B\u0434\u0443\u0449\u0435\u0433\u043E \u0441\u043F\u0438\u0441\u043A\u0430",
+    generalChange: app.generalChange || "\u041F\u0435\u0440\u0432\u044B\u0439 \u0441\u043D\u0438\u043C\u043E\u043A",
     activeChange: app.activeChange || "\u041D\u0435\u0442 \u0441\u043E\u043F\u043E\u0441\u0442\u0430\u0432\u0438\u043C\u043E\u0439 \u0430\u043A\u0442\u0438\u0432\u043D\u043E\u0439 \u043F\u043E\u0437\u0438\u0446\u0438\u0438"
   };
 }
-async function getDashboardData() {
-  const endpoint = define_import_meta_env_default.VITE_GAS_ENDPOINT;
-  if (!endpoint) {
-    throw new Error("\u041D\u0435 \u0437\u0430\u0434\u0430\u043D \u0430\u0434\u0440\u0435\u0441 read-only API. \u0414\u043E\u0431\u0430\u0432\u044C\u0442\u0435 VITE_GAS_ENDPOINT \u0432 \u043D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0438 \u043F\u0440\u043E\u0435\u043A\u0442\u0430.");
-  }
-  const response = await fetch(endpoint, {
+async function requestJson(url) {
+  const response = await fetch(url, {
     cache: "no-store",
     redirect: "follow"
   });
   if (!response.ok) {
     throw new Error(`API \u0432\u0435\u0440\u043D\u0443\u043B \u043E\u0448\u0438\u0431\u043A\u0443 ${response.status}.`);
   }
-  const payload = await response.json();
+  return response.json();
+}
+async function getDashboardData() {
+  const payload = await requestJson(endpointUrl());
   if (!payload?.meta || !Array.isArray(payload.applications) || !Array.isArray(payload.coverage)) {
     throw new Error("API \u0432\u0435\u0440\u043D\u0443\u043B \u043E\u0442\u0432\u0435\u0442 \u0432 \u043D\u0435\u043E\u0436\u0438\u0434\u0430\u043D\u043D\u043E\u043C \u0444\u043E\u0440\u043C\u0430\u0442\u0435.");
   }
