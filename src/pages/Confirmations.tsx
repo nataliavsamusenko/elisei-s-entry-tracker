@@ -75,9 +75,10 @@ const Confirmations = () => {
                 Абитуриент №{meta.candidateId} · Актуальность данных: {meta.lastUpdate}
               </p>
             </div>
-            <Link to="/" className="text-sm underline underline-offset-4 opacity-90 hover:opacity-100">
-              ← На главную
-            </Link>
+            <nav className="flex flex-col items-start md:items-end gap-1 text-sm">
+              <Link to="/" className="underline underline-offset-4 opacity-90 hover:opacity-100">← На главную</Link>
+              <Link to="/applicants" className="underline underline-offset-4 opacity-90 hover:opacity-100">Карта поступающих</Link>
+            </nav>
           </div>
         </div>
       </header>
