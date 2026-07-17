@@ -1338,7 +1338,7 @@ function extractPositionInfoFromSnapshot_(
 
   if (
     basis === 'Бюджет' &&
-    consentValue === 'электронное' &&
+    isConfirmedConsent_(consentValue) &&
     consentRank !== null
   ) {
     return {
@@ -2264,10 +2264,15 @@ function parseApplicant_(text) {
 
 
 /**
- * Бюджет: только точное значение «Электронное».
+ * Бюджет: точное значение «Электронное» или «Бумажное».
  */
 function isConfirmedConsent_(value) {
-  return normalize_(value) === 'электронное';
+  const normalized = normalize_(value);
+
+  return (
+    normalized === 'электронное' ||
+    normalized === 'бумажное'
+  );
 }
 
 
