@@ -3370,7 +3370,13 @@ function continueApplicantsRebuildBatch_(ss) {
       const state = parseParticipantsState_(text);
 
       if (!hasParticipantRows_(state)) {
-        throw new Error('Не удалось прочитать участников CSV.');
+        throw new Error(
+          'Не удалось прочитать участников CSV «' +
+          file.getName() +
+          '» (ID ' +
+          file.getId() +
+          ').'
+        );
       }
 
       const records = getSortedApplicationRecords_(state);
@@ -7938,15 +7944,44 @@ function resetDashboardSheet_(sheet) {
 
 function getFileText_(file) {
   const blob = file.getBlob();
+  const utf8Text = cleanFileText_(
+    blob.getDataAsString('UTF-8')
+  );
 
-  let text = blob.getDataAsString('UTF-8');
-
-  if (text.indexOf('�') !== -1) {
-    text = blob.getDataAsString('windows-1251');
+  // Один повреждённый символ в большом UTF-8 CSV не должен
+  // переключать весь файл на Windows-1251 и ломать заголовки.
+  if (hasRecognizableApplicantHeader_(utf8Text)) {
+    return utf8Text;
   }
 
+  const windowsText = cleanFileText_(
+    blob.getDataAsString('windows-1251')
+  );
+
+  if (hasRecognizableApplicantHeader_(windowsText)) {
+    return windowsText;
+  }
+
+  return utf8Text.indexOf('�') === -1
+    ? utf8Text
+    : windowsText;
+}
+
+
+function cleanFileText_(text) {
   return String(text || '')
     .replace(/^\uFEFF/, '');
+}
+
+
+function hasRecognizableApplicantHeader_(text) {
+  const sample = String(text || '').slice(0, 32768);
+
+  if (!sample) {
+    return false;
+  }
+
+  return findHeaderRow_(parseCsv_(sample)) !== -1;
 }
 
 
