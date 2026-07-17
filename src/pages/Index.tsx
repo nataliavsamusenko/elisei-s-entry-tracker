@@ -10,7 +10,10 @@ import {
   CoverageEntry,
   DashboardMeta,
   getDashboardData,
+  hasBudgetConsent,
+  hasPaidContract,
 } from "@/data/applications";
+
 import {
   AdmissionControl,
   formatKnown,
@@ -18,6 +21,8 @@ import {
   getAdmissionControl,
   getDecision,
 } from "@/data/admission-control";
+
+
 
 type ControlledApplication = {
   app: Application;
@@ -72,6 +77,9 @@ const Index = () => {
     .filter(({ control }) => control.seats !== null && control.contractsCount !== null)
     .reduce((sum, { control }) => sum + Math.max(0, (control.seats ?? 0) - (control.contractsCount ?? 0)), 0);
   const paidFreeIsKnown = paidApps.some(({ control }) => control.seats !== null && control.contractsCount !== null);
+  const consentsCount = apps.filter(hasBudgetConsent).length;
+  const contractsCount = apps.filter(hasPaidContract).length;
+
 
   const rankValue = ({ app, control }: ControlledApplication) => getActiveRank(app, control) ?? Number.MAX_SAFE_INTEGER;
   const topBudget = [...budgetApps].sort((a, b) => rankValue(a) - rankValue(b)).slice(0, 3);
@@ -119,7 +127,7 @@ const Index = () => {
           <KpiCard label="В пределах квоты" value={String(withinQuota)} sub="по доступным квотам" />
           <KpiCard label="В резерве" value={String(reserve)} sub="по доступным позициям" />
           <KpiCard label="Свободных платных мест" value={paidFreeIsKnown ? String(paidFreeKnown) : "—"} sub={paidFreeIsKnown ? "по опубликованным договорам" : "нет данных по договорам"} />
-          <KpiCard label="Нужны данные" value={String(missingData)} sub="групп требуют уточнения" />
+          <ConfirmationsKpiCard consents={consentsCount} contracts={contractsCount} />
           <KpiCard label="Списков получено" value={`${meta.receivedTotal} / ${meta.totalGroups}`} sub={`${Math.round((meta.receivedTotal / meta.totalGroups) * 100)}% покрытия`} highlight />
         </section>
 
@@ -240,9 +248,22 @@ const Index = () => {
           </section>
         </div>
 
+        <section>
+          <Card className="p-5 md:p-6 shadow-card bg-secondary/40 border-dashed">
+            <div className="flex flex-wrap items-baseline justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-semibold text-foreground">Полнота данных</h3>
+                <p className="text-xs text-muted-foreground mt-1">Группы, где ещё не сопоставлены места или не опубликованы согласия/договоры.</p>
+              </div>
+              <div className="text-2xl font-semibold tabular-nums text-muted-foreground">{missingData}</div>
+            </div>
+          </Card>
+        </section>
+
         <footer className="pt-4 pb-4 text-center text-xs text-muted-foreground">
           Текущие списки и история — из трекера поступления. Квоты и стоимость — из листа «План мест».
         </footer>
+
       </main>
     </div>
   );
@@ -259,6 +280,33 @@ function KpiCard({ label, value, sub, highlight }: { label: string; value: strin
     {sub && <div className={`text-xs mt-1 ${highlight ? "opacity-80" : "text-muted-foreground"}`}>{sub}</div>}
   </Card>;
 }
+
+function ConfirmationsKpiCard({ consents, contracts }: { consents: number; contracts: number }) {
+  return (
+    <a
+      href="/confirmations"
+      target="_blank"
+      rel="noopener noreferrer"
+      className="block group focus:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded-lg"
+    >
+      <Card className="p-4 md:p-5 shadow-card border-l-4 border-l-accent transition-colors group-hover:bg-secondary/50 h-full">
+        <div className="text-[11px] uppercase tracking-wider text-muted-foreground">Подтверждения Елисея</div>
+        <div className="mt-2 space-y-1">
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="text-xs text-muted-foreground">Согласий</span>
+            <span className="text-xl md:text-2xl font-semibold tabular-nums">{consents}</span>
+          </div>
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="text-xs text-muted-foreground">Договоров</span>
+            <span className="text-xl md:text-2xl font-semibold tabular-nums">{contracts}</span>
+          </div>
+        </div>
+        <div className="text-[11px] text-accent mt-2 underline underline-offset-2">Открыть список →</div>
+      </Card>
+    </a>
+  );
+}
+
 
 function TopPositions({ title, basis, items }: { title: string; basis: "Бюджет" | "Платное"; items: ControlledApplication[] }) {
   return <Card className="p-4 md:p-5 shadow-card">
