@@ -4,7 +4,7 @@ const CFG = {
   rootFolderId: '12SbS6N5dICiOkG5R4YS8b-E3XknSnY_Z',
   maxSnapshotsPerGroup: 20,
   applicantRebuildBatchSize: 1,
-  applicantRebuildRowsPerBatch: 1500,
+  applicantRebuildRowsPerBatch: 400,
 
   sheets: {
     dashboard: 'Дашборд',
@@ -3446,6 +3446,10 @@ function continueApplicantsRebuildBatch_(ss) {
     };
   }
 
+  // Если текущий пакет упрётся в шестиминутный лимит Apps Script,
+  // этот триггер продолжит сборку с сохранённого курсора.
+  createApplicantRebuildSafetyTrigger_();
+
   const queue = JSON.parse(queueText);
   let groupCursor = Math.max(
     0,
@@ -3750,6 +3754,16 @@ function createApplicantRebuildTrigger_() {
   ScriptApp.newTrigger('continueApplicantsRebuild')
     .timeBased()
     .after(60 * 1000)
+    .create();
+}
+
+
+function createApplicantRebuildSafetyTrigger_() {
+  removeApplicantRebuildTriggers_();
+
+  ScriptApp.newTrigger('continueApplicantsRebuild')
+    .timeBased()
+    .after(7 * 60 * 1000)
     .create();
 }
 
@@ -4909,12 +4923,19 @@ function findApplicantCodeByProfileKey_(ss, profileKey) {
 
 
 function makeApplicantProfileKey_(code) {
-  const props = PropertiesService.getScriptProperties();
-  let salt = props.getProperty('APPLICANT_PROFILE_SALT');
+  let salt = makeApplicantProfileKey_.salt;
 
   if (!salt) {
-    salt = Utilities.getUuid() + Utilities.getUuid();
-    props.setProperty('APPLICANT_PROFILE_SALT', salt);
+    const props = PropertiesService.getScriptProperties();
+
+    salt = props.getProperty('APPLICANT_PROFILE_SALT');
+
+    if (!salt) {
+      salt = Utilities.getUuid() + Utilities.getUuid();
+      props.setProperty('APPLICANT_PROFILE_SALT', salt);
+    }
+
+    makeApplicantProfileKey_.salt = salt;
   }
 
   const bytes = Utilities.computeHmacSha256Signature(
