@@ -4,6 +4,7 @@ const CFG = {
   rootFolderId: '12SbS6N5dICiOkG5R4YS8b-E3XknSnY_Z',
   maxSnapshotsPerGroup: 20,
   applicantRebuildBatchSize: 1,
+  applicantRebuildRowsPerBatch: 1500,
 
   sheets: {
     dashboard: 'Дашборд',
@@ -3220,6 +3221,9 @@ const APPLICANTS_REBUILD_CURSOR_PROPERTY =
 const APPLICANTS_REBUILD_ERRORS_PROPERTY =
   'APPLICANTS_REBUILD_ERRORS';
 
+const APPLICANTS_REBUILD_ROWS_CURSOR_PROPERTY =
+  'APPLICANTS_REBUILD_ROWS_CURSOR';
+
 
 /**
  * Начинает безопасную порционную сборку актуальных заявлений.
@@ -3253,6 +3257,11 @@ function startApplicantsRebuild() {
 
     props.setProperty(
       APPLICANTS_REBUILD_ERRORS_PROPERTY,
+      '0'
+    );
+
+    props.setProperty(
+      APPLICANTS_REBUILD_ROWS_CURSOR_PROPERTY,
       '0'
     );
 
@@ -3309,11 +3318,20 @@ function continueApplicantsRebuildBatch_(ss) {
   }
 
   const queue = JSON.parse(queueText);
-  const cursor = Math.max(
+  let groupCursor = Math.max(
     0,
     Number(
       props.getProperty(
         APPLICANTS_REBUILD_CURSOR_PROPERTY
+      ) || 0
+    )
+  );
+
+  let rowsCursor = Math.max(
+    0,
+    Number(
+      props.getProperty(
+        APPLICANTS_REBUILD_ROWS_CURSOR_PROPERTY
       ) || 0
     )
   );
@@ -3327,11 +3345,6 @@ function continueApplicantsRebuildBatch_(ss) {
     )
   );
 
-  const end = Math.min(
-    queue.length,
-    cursor + CFG.applicantRebuildBatchSize
-  );
-
   const registry = getRegistry_(
     ss.getSheetByName(CFG.sheets.registry)
   );
@@ -3340,34 +3353,62 @@ function continueApplicantsRebuildBatch_(ss) {
     CFG.sheets.applicationsStaging
   );
 
-  const updates = {};
   let errors = previousErrors;
 
-  for (let i = cursor; i < end; i++) {
-    const source = queue[i];
+  if (groupCursor < queue.length) {
+    const source = queue[groupCursor];
     const group = registry.byId[source.groupId];
 
-    if (!group) {
-      errors++;
-      continue;
-    }
-
     try {
+      if (!group) {
+        throw new Error('Не найдена конкурсная группа.');
+      }
+
       const file = DriveApp.getFileById(source.fileId);
       const text = getFileText_(file);
       const hash = makeHash_(text);
+      const state = parseParticipantsState_(text);
 
-      queueApplicationGroupUpdate_(
-        updates,
-        registry,
-        group,
-        file,
-        text,
-        '',
-        hash
+      if (!hasParticipantRows_(state)) {
+        throw new Error('Не удалось прочитать участников CSV.');
+      }
+
+      const records = getSortedApplicationRecords_(state);
+      const end = Math.min(
+        records.length,
+        rowsCursor + CFG.applicantRebuildRowsPerBatch
       );
+
+      appendApplicationRows_(
+        staging,
+        buildApplicationRowsForGroupRange_(
+          registry,
+          group,
+          state,
+          file,
+          '',
+          hash,
+          getListDate_(file),
+          snapshotSortDate_(
+            getListDate_(file),
+            file.getLastUpdated().getTime()
+          ),
+          records,
+          rowsCursor,
+          end
+        )
+      );
+
+      if (end >= records.length) {
+        groupCursor++;
+        rowsCursor = 0;
+      } else {
+        rowsCursor = end;
+      }
     } catch (error) {
       errors++;
+      groupCursor++;
+      rowsCursor = 0;
 
       Logger.log(
         'Ошибка карты поступающих для ' +
@@ -3378,14 +3419,9 @@ function continueApplicantsRebuildBatch_(ss) {
     }
   }
 
-  appendApplicationUpdatesToSheet_(
-    staging,
-    updates
-  );
-
   props.setProperty(
     APPLICANTS_REBUILD_CURSOR_PROPERTY,
-    String(end)
+    String(groupCursor)
   );
 
   props.setProperty(
@@ -3393,7 +3429,12 @@ function continueApplicantsRebuildBatch_(ss) {
     String(errors)
   );
 
-  const completed = end >= queue.length;
+  props.setProperty(
+    APPLICANTS_REBUILD_ROWS_CURSOR_PROPERTY,
+    String(rowsCursor)
+  );
+
+  const completed = groupCursor >= queue.length;
 
   if (completed) {
     publishApplicantStaging_(ss, errors === 0);
@@ -3411,13 +3452,17 @@ function continueApplicantsRebuildBatch_(ss) {
       APPLICANTS_REBUILD_ERRORS_PROPERTY
     );
 
+    props.deleteProperty(
+      APPLICANTS_REBUILD_ROWS_CURSOR_PROPERTY
+    );
+
     removeApplicantRebuildTriggers_();
   } else {
     createApplicantRebuildTrigger_();
   }
 
   return {
-    processed: end,
+    processed: groupCursor,
     total: queue.length,
     errors: errors,
     completed: completed
@@ -3426,7 +3471,6 @@ function continueApplicantsRebuildBatch_(ss) {
 
 
 function appendApplicationUpdatesToSheet_(sheet, updates) {
-  const headerNames = applicationMapHeaders_();
   let rows = [];
 
   Object.keys(updates)
@@ -3434,6 +3478,13 @@ function appendApplicationUpdatesToSheet_(sheet, updates) {
     .forEach(function (groupId) {
       rows = rows.concat(updates[groupId].rows);
     });
+
+  return appendApplicationRows_(sheet, rows);
+}
+
+
+function appendApplicationRows_(sheet, rows) {
+  const headerNames = applicationMapHeaders_();
 
   if (!rows.length) {
     return false;
@@ -3644,13 +3695,26 @@ function buildApplicationRowsForGroup_(
   snapshot,
   sortDate
 ) {
-  const seats = numberOrNull_(
-    group.row[
-      registry.headers['Мест']
-    ]
-  );
+  const records = getSortedApplicationRecords_(state);
 
-  const records = Object.keys(state.rows)
+  return buildApplicationRowsForGroupRange_(
+    registry,
+    group,
+    state,
+    file,
+    path,
+    hash,
+    snapshot,
+    sortDate,
+    records,
+    0,
+    records.length
+  );
+}
+
+
+function getSortedApplicationRecords_(state) {
+  return Object.keys(state.rows)
     .map(function (id) {
       return state.rows[id];
     })
@@ -3665,11 +3729,46 @@ function buildApplicationRowsForGroup_(
 
       return firstPosition - secondPosition;
     });
+}
+
+
+function buildApplicationRowsForGroupRange_(
+  registry,
+  group,
+  state,
+  file,
+  path,
+  hash,
+  snapshot,
+  sortDate,
+  records,
+  start,
+  end
+) {
+  const seats = numberOrNull_(
+    group.row[
+      registry.headers['Мест']
+    ]
+  );
 
   let consentRank = 0;
   let contractRank = 0;
 
-  return records.map(function (record) {
+  for (let i = 0; i < start; i++) {
+    if (records[i].hasConsent) {
+      consentRank++;
+    }
+
+    if (records[i].hasContract) {
+      contractRank++;
+    }
+  }
+
+  const rows = [];
+
+  for (let i = start; i < end; i++) {
+    const record = records[i];
+
     if (record.hasConsent) {
       consentRank++;
     }
@@ -3678,7 +3777,7 @@ function buildApplicationRowsForGroup_(
       contractRank++;
     }
 
-    return {
+    rows.push({
       'Код поступающего': record.id,
       'Ключ профиля': makeApplicantProfileKey_(record.id),
       'Код для показа': maskApplicantCode_(record.id),
@@ -3718,8 +3817,10 @@ function buildApplicationRowsForGroup_(
       'Путь к файлу': path,
       'Хеш CSV': hash,
       'Время обработки': formatDateTime_(new Date())
-    };
-  });
+    });
+  }
+
+  return rows;
 }
 
 
