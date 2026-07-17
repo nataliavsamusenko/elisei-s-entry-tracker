@@ -3233,6 +3233,10 @@ const APPLICANTS_REBUILD_RESTART_PROPERTY =
  * Рабочие данные заменяются только после обработки всей очереди.
  */
 function startApplicantsRebuild() {
+  PropertiesService.getScriptProperties().deleteProperty(
+    APPLICANTS_REBUILD_RESTART_PROPERTY
+  );
+
   runApplicantsRebuildResume_(true);
 }
 
