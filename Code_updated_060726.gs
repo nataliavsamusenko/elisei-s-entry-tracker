@@ -3224,57 +3224,116 @@ const APPLICANTS_REBUILD_ERRORS_PROPERTY =
 const APPLICANTS_REBUILD_ROWS_CURSOR_PROPERTY =
   'APPLICANTS_REBUILD_ROWS_CURSOR';
 
+const APPLICANTS_REBUILD_RESTART_PROPERTY =
+  'APPLICANTS_REBUILD_RESTART';
+
 
 /**
  * Начинает безопасную порционную сборку актуальных заявлений.
  * Рабочие данные заменяются только после обработки всей очереди.
  */
 function startApplicantsRebuild() {
-  withLock_(function () {
+  const props = PropertiesService.getScriptProperties();
+
+  props.setProperty(
+    APPLICANTS_REBUILD_RESTART_PROPERTY,
+    '1'
+  );
+
+  runApplicantsRebuildStart_(true);
+}
+
+
+function startApplicantsRebuildScheduled() {
+  const props = PropertiesService.getScriptProperties();
+
+  if (
+    props.getProperty(
+      APPLICANTS_REBUILD_RESTART_PROPERTY
+    ) !== '1'
+  ) {
+    removeApplicantRebuildTriggers_();
+    return;
+  }
+
+  runApplicantsRebuildStart_(false);
+}
+
+
+function runApplicantsRebuildStart_(showToast) {
+  removeApplicantRebuildTriggers_();
+
+  const lock = LockService.getScriptLock();
+
+  if (!lock.tryLock(5000)) {
+    createApplicantRebuildStartTrigger_();
+
+    if (showToast) {
+      SpreadsheetApp.openById(CFG.spreadsheetId).toast(
+        'Другой этап ещё выполняется. Чистый перезапуск поставлен в очередь.',
+        'Карта поступающих',
+        15
+      );
+    }
+
+    return;
+  }
+
+  try {
     const ss = SpreadsheetApp.openById(
       CFG.spreadsheetId
     );
 
     ensureSchemas_(ss);
-
-    const queue = buildLatestApplicantSources_(ss);
-    const props = PropertiesService.getScriptProperties();
-    const staging = ss.getSheetByName(
-      CFG.sheets.applicationsStaging
-    );
-
-    clearDataRows_(staging);
-
-    props.setProperty(
-      APPLICANTS_REBUILD_QUEUE_PROPERTY,
-      JSON.stringify(queue)
-    );
-
-    props.setProperty(
-      APPLICANTS_REBUILD_CURSOR_PROPERTY,
-      '0'
-    );
-
-    props.setProperty(
-      APPLICANTS_REBUILD_ERRORS_PROPERTY,
-      '0'
-    );
-
-    props.setProperty(
-      APPLICANTS_REBUILD_ROWS_CURSOR_PROPERTY,
-      '0'
-    );
-
-    removeApplicantRebuildTriggers_();
+    initializeApplicantsRebuild_(ss);
 
     const progress = continueApplicantsRebuildBatch_(ss);
 
-    ss.toast(
-      applicantRebuildProgressMessage_(progress),
-      'Карта поступающих',
-      15
-    );
-  });
+    if (showToast) {
+      ss.toast(
+        applicantRebuildProgressMessage_(progress),
+        'Карта поступающих',
+        15
+      );
+    }
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+
+function initializeApplicantsRebuild_(ss) {
+  const queue = buildLatestApplicantSources_(ss);
+  const props = PropertiesService.getScriptProperties();
+  const staging = ss.getSheetByName(
+    CFG.sheets.applicationsStaging
+  );
+
+  clearDataRows_(staging);
+
+  props.setProperty(
+    APPLICANTS_REBUILD_QUEUE_PROPERTY,
+    JSON.stringify(queue)
+  );
+
+  props.setProperty(
+    APPLICANTS_REBUILD_CURSOR_PROPERTY,
+    '0'
+  );
+
+  props.setProperty(
+    APPLICANTS_REBUILD_ERRORS_PROPERTY,
+    '0'
+  );
+
+  props.setProperty(
+    APPLICANTS_REBUILD_ROWS_CURSOR_PROPERTY,
+    '0'
+  );
+
+  props.deleteProperty(
+    APPLICANTS_REBUILD_RESTART_PROPERTY
+  );
 }
 
 
@@ -3289,6 +3348,16 @@ function continueApplicantsRebuild() {
 
     ensureSchemas_(ss);
     removeApplicantRebuildTriggers_();
+
+    const props = PropertiesService.getScriptProperties();
+
+    if (
+      props.getProperty(
+        APPLICANTS_REBUILD_RESTART_PROPERTY
+      ) === '1'
+    ) {
+      initializeApplicantsRebuild_(ss);
+    }
 
     const progress = continueApplicantsRebuildBatch_(ss);
 
@@ -3625,11 +3694,27 @@ function createApplicantRebuildTrigger_() {
 }
 
 
+function createApplicantRebuildStartTrigger_() {
+  removeApplicantRebuildTriggers_();
+
+  ScriptApp.newTrigger('startApplicantsRebuildScheduled')
+    .timeBased()
+    .after(60 * 1000)
+    .create();
+}
+
+
 function removeApplicantRebuildTriggers_() {
+  const handlers = [
+    'continueApplicantsRebuild',
+    'startApplicantsRebuildScheduled'
+  ];
+
   ScriptApp.getProjectTriggers().forEach(function (trigger) {
     if (
-      trigger.getHandlerFunction() ===
-      'continueApplicantsRebuild'
+      handlers.indexOf(
+        trigger.getHandlerFunction()
+      ) !== -1
     ) {
       ScriptApp.deleteTrigger(trigger);
     }
