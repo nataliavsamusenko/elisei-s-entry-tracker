@@ -336,6 +336,7 @@ function processCsvFiles_(ss, mode) {
   const registry = getRegistry_(registrySheet);
   let snapshotIndex = buildSnapshotIndex_(snapshotsSheet);
   const known = getKnownKeys_(stateSheet);
+  const journalKnown = getKnownKeys_(journalSheet);
   const applicationUpdates = {};
 
   const result = {
@@ -452,6 +453,20 @@ function processCsvFiles_(ss, mode) {
         mode === 'incremental' &&
         (known[dedupeKey] || existingSnapshot)
       ) {
+        if (existingSnapshot && !journalKnown[dedupeKey]) {
+          backfillProcessedJournalEntry_(
+            journalSheet,
+            journalKnown,
+            context,
+            group,
+            file,
+            text,
+            hash,
+            dedupeKey,
+            item.path
+          );
+        }
+
         if (!known[dedupeKey]) {
           appendState_(stateSheet, stateRow_(
             dedupeKey,
@@ -472,6 +487,20 @@ function processCsvFiles_(ss, mode) {
         mode === 'missingSnapshots' &&
         existingSnapshot
       ) {
+        if (!journalKnown[dedupeKey]) {
+          backfillProcessedJournalEntry_(
+            journalSheet,
+            journalKnown,
+            context,
+            group,
+            file,
+            text,
+            hash,
+            dedupeKey,
+            item.path
+          );
+        }
+
         if (!known[dedupeKey]) {
           appendState_(stateSheet, stateRow_(
             dedupeKey,
@@ -571,26 +600,6 @@ function processCsvFiles_(ss, mode) {
         known[dedupeKey] = true;
       }
 
-      if (mode !== 'missingSnapshots') {
-        try {
-          upsertChangeMetricsForCurrentSnapshot_(
-            ss,
-            snapshotsSheet,
-            group,
-            file,
-            text,
-            hash
-          );
-        } catch (changeError) {
-          Logger.log(
-            'Ошибка расчёта изменений для ' +
-            group.id +
-            ': ' +
-            String(changeError)
-          );
-        }
-      }
-
       if (!existingSnapshot) {
         appendJournal_(journalSheet, {
           context: context,
@@ -615,6 +624,28 @@ function processCsvFiles_(ss, mode) {
             ) +
             '.'
         });
+
+        journalKnown[dedupeKey] = true;
+      }
+
+      if (mode !== 'missingSnapshots') {
+        try {
+          upsertChangeMetricsForCurrentSnapshot_(
+            ss,
+            snapshotsSheet,
+            group,
+            file,
+            text,
+            hash
+          );
+        } catch (changeError) {
+          Logger.log(
+            'Ошибка расчёта изменений для ' +
+            group.id +
+            ': ' +
+            String(changeError)
+          );
+        }
       }
 
     } catch (error) {
@@ -3238,6 +3269,51 @@ function startApplicantsRebuild() {
   );
 
   runApplicantsRebuildResume_(true);
+}
+
+
+function backfillProcessedJournalEntry_(
+  sheet,
+  journalKnown,
+  context,
+  group,
+  file,
+  text,
+  hash,
+  dedupeKey,
+  path
+) {
+  const parsed = parseApplicant_(text);
+
+  if (!parsed || !parsed.candidate) {
+    return;
+  }
+
+  appendJournal_(sheet, {
+    context: context,
+    group: group,
+    file: file,
+    hash: hash,
+    key: dedupeKey,
+    path: path,
+    extracted: 'Да',
+    added: 'Да',
+    mode: 'Восстановлено по снимку',
+    comment:
+      'Запись журнала восстановлена после прерванного запуска. Согласий: ' +
+      valueOrText_(
+        parsed.stats.consentsCount,
+        'не опубликовано'
+      ) +
+      '; договоров: ' +
+      valueOrText_(
+        parsed.stats.contractsCount,
+        'не опубликовано'
+      ) +
+      '.'
+  });
+
+  journalKnown[dedupeKey] = true;
 }
 
 
