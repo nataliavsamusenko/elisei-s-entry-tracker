@@ -13,6 +13,7 @@ import {
 import { Card } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
+  ApplicationStatisticsSummary,
   ListChangeItem,
   getChanges,
 } from "@/data/applications";
@@ -62,6 +63,7 @@ const CHANGE_SERIES: ChangeSeries[] = [
 const Changes = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const [items, setItems] = useState<ListChangeItem[]>([]);
+  const [summaries, setSummaries] = useState<ApplicationStatisticsSummary[]>([]);
   const [history, setHistory] = useState<ListChangeItem[]>([]);
   const [selectedId, setSelectedId] = useState(searchParams.get("groupId") || "");
   const [universityFilter, setUniversityFilter] = useState(ALL);
@@ -73,7 +75,10 @@ const Changes = () => {
 
   useEffect(() => {
     getChanges()
-      .then((data) => setItems(data.items))
+      .then((data) => {
+        setItems(data.items);
+        setSummaries(data.summaries);
+      })
       .catch((cause: unknown) => {
         setError(cause instanceof Error ? cause.message : "Не удалось получить изменения списков.");
       })
@@ -122,6 +127,11 @@ const Changes = () => {
       (item) => item.newApplications
     ),
   }), [filteredItems]);
+
+  const selectedSummary = useMemo(() => summaries.find((item) => (
+    item.university === (universityFilter === ALL ? "" : universityFilter) &&
+    item.basis === (basisFilter === ALL ? "" : basisFilter)
+  )) ?? null, [summaries, universityFilter, basisFilter]);
 
   const selectedHistory = useMemo(
     () => sortChangesDesc(history).slice(0, HISTORY_LIMIT),
@@ -240,15 +250,21 @@ const Changes = () => {
           <section className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
             <AggregateMetricCard
               label="Всего заявлений"
-              metric={aggregateStats.totalApplications}
-              totalGroups={filteredItems.length}
+              value={selectedSummary?.totalApplications ?? aggregateStats.totalApplications.value}
+              detail={selectedSummary?.totalApplicants === null || selectedSummary?.totalApplicants === undefined
+                ? "Количество уникальных поступающих будет рассчитано после следующей сборки"
+                : `от ${formatCount(selectedSummary.totalApplicants)} уникальных поступающих`}
               note="в последних снимках выбранных групп"
             />
             <AggregateMetricCard
               label="Новых заявлений"
-              metric={aggregateStats.newApplications}
-              totalGroups={filteredItems.length}
-              note="относительно предыдущих снимков"
+              value={selectedSummary?.newApplications ?? aggregateStats.newApplications.value}
+              detail={selectedSummary?.applicantsWithNewApplications === null || selectedSummary?.applicantsWithNewApplications === undefined
+                ? "Количество поступающих будет рассчитано после следующей сборки"
+                : `от ${formatCount(selectedSummary.applicantsWithNewApplications)} поступающих`}
+              note={selectedSummary?.newApplicants === null || selectedSummary?.newApplicants === undefined
+                ? "относительно предыдущих снимков"
+                : `из них впервые появились в трекере: ${formatCount(selectedSummary.newApplicants)}`}
               accent
             />
           </section>
@@ -371,14 +387,14 @@ function sumAvailable(items: ListChangeItem[], select: (item: ListChangeItem) =>
 
 function AggregateMetricCard({
   label,
-  metric,
-  totalGroups,
+  value,
+  detail,
   note,
   accent = false,
 }: {
   label: string;
-  metric: AggregateMetric;
-  totalGroups: number;
+  value: number | null;
+  detail: string;
   note: string;
   accent?: boolean;
 }) {
@@ -386,14 +402,16 @@ function AggregateMetricCard({
     <Card className={`p-5 shadow-card ${accent ? "border-primary/40" : ""}`}>
       <div className="text-xs uppercase tracking-wider text-muted-foreground">{label}</div>
       <div className={`mt-1 text-3xl font-semibold tabular-nums ${accent ? "text-primary" : ""}`}>
-        {metric.value === null ? "—" : metric.value.toLocaleString("ru-RU")}
+        {value === null ? "—" : formatCount(value)}
       </div>
-      <div className="mt-1 text-sm text-muted-foreground">{note}</div>
-      <div className="mt-2 text-xs text-muted-foreground">
-        Данные: {metric.availableGroups} из {totalGroups} групп
-      </div>
+      <div className="mt-1 text-sm font-medium">{detail}</div>
+      <div className="mt-2 text-xs text-muted-foreground">{note}</div>
     </Card>
   );
+}
+
+function formatCount(value: number) {
+  return value.toLocaleString("ru-RU");
 }
 
 function SnapshotTotalCard({ value }: { value: number | null }) {

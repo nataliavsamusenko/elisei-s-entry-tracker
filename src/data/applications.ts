@@ -91,6 +91,19 @@ export interface ChangesData {
     basis: string;
   };
   items: ListChangeItem[];
+  summaries: ApplicationStatisticsSummary[];
+}
+
+export interface ApplicationStatisticsSummary {
+  scopeKey: string;
+  university: string;
+  basis: string;
+  totalApplications: number | null;
+  totalApplicants: number | null;
+  newApplications: number | null;
+  applicantsWithNewApplications: number | null;
+  newApplicants: number | null;
+  calculatedAt: string;
 }
 
 export type ChangesFilters = {
@@ -302,6 +315,17 @@ type ApiChangesPayload = {
     basis?: string;
   };
   items: ApiChangeItem[];
+  summaries?: Array<{
+    scopeKey?: string;
+    university?: string;
+    basis?: string;
+    totalApplications?: ApiNumber;
+    totalApplicants?: ApiNumber;
+    newApplications?: ApiNumber;
+    applicantsWithNewApplications?: ApiNumber;
+    newApplicants?: ApiNumber;
+    calculatedAt?: string;
+  }>;
 };
 
 type ApiApplicantsPayload = {
@@ -526,6 +550,17 @@ export async function getChanges(filters: ChangesFilters = {}): Promise<ChangesD
       basis: payload.filters?.basis || "",
     },
     items: payload.items.map(mapChangeItem),
+    summaries: (payload.summaries || []).map((item) => ({
+      scopeKey: item.scopeKey || "",
+      university: item.university || "",
+      basis: item.basis || "",
+      totalApplications: toNullableNumber(item.totalApplications),
+      totalApplicants: toNullableNumber(item.totalApplicants),
+      newApplications: toNullableNumber(item.newApplications),
+      applicantsWithNewApplications: toNullableNumber(item.applicantsWithNewApplications),
+      newApplicants: toNullableNumber(item.newApplicants),
+      calculatedAt: item.calculatedAt || "",
+    })),
   };
 }
 
