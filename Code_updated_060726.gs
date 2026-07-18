@@ -16,7 +16,8 @@ const CFG = {
     state: 'CSV_состояние',
     allApplications: 'Все заявления',
     applicants: 'Поступающие',
-    applicationsStaging: 'Все заявления_сборка'
+    applicationsStaging: 'Все заявления_сборка',
+    applicationStatistics: 'Статистика заявлений'
   },
 
   ignoredFolders: ['планы мест'],
@@ -3281,6 +3282,9 @@ const APPLICANTS_REBUILD_ROWS_CURSOR_PROPERTY =
 const APPLICANTS_REBUILD_RESTART_PROPERTY =
   'APPLICANTS_REBUILD_RESTART';
 
+const APPLICANTS_REBUILD_STATS_PROPERTY =
+  'APPLICANTS_REBUILD_STATS_READY';
+
 
 /**
  * Начинает безопасную порционную сборку актуальных заявлений.
@@ -3493,6 +3497,10 @@ function initializeApplicantsRebuild_(ss) {
   props.deleteProperty(
     APPLICANTS_REBUILD_RESTART_PROPERTY
   );
+
+  props.deleteProperty(
+    APPLICANTS_REBUILD_STATS_PROPERTY
+  );
 }
 
 
@@ -3675,6 +3683,23 @@ function continueApplicantsRebuildBatch_(ss) {
   const completed = groupCursor >= queue.length;
 
   if (completed) {
+    if (
+      props.getProperty(
+        APPLICANTS_REBUILD_STATS_PROPERTY
+      ) !== '1'
+    ) {
+      refreshApplicationStatistics_(
+        ss,
+        staging,
+        errors === 0
+      );
+
+      props.setProperty(
+        APPLICANTS_REBUILD_STATS_PROPERTY,
+        '1'
+      );
+    }
+
     publishApplicantStaging_(ss, errors === 0);
     rebuildApplicantProfiles_(ss);
 
@@ -3692,6 +3717,10 @@ function continueApplicantsRebuildBatch_(ss) {
 
     props.deleteProperty(
       APPLICANTS_REBUILD_ROWS_CURSOR_PROPERTY
+    );
+
+    props.deleteProperty(
+      APPLICANTS_REBUILD_STATS_PROPERTY
     );
 
     removeApplicantRebuildTriggers_();
@@ -4166,12 +4195,22 @@ function applyApplicationGroupUpdates_(ss, updates) {
     CFG.sheets.allApplications
   );
 
+  const previous = readApplicationIdentityIndex_(
+    sheet
+  );
+
   const changed = applyApplicationUpdatesToSheet_(
     sheet,
     updates
   );
 
   if (changed) {
+    writeApplicationStatistics_(
+      ss,
+      previous,
+      readApplicationIdentityIndex_(sheet)
+    );
+
     rebuildApplicantProfiles_(ss);
   }
 }
@@ -5186,6 +5225,21 @@ function applicationMapHeaders_() {
 }
 
 
+function applicationStatisticsHeaders_() {
+  return [
+    'Ключ среза',
+    'Вуз',
+    'Основа',
+    'Всего заявлений',
+    'Уникальных поступающих',
+    'Новых заявлений',
+    'Поступающих с новыми заявлениями',
+    'Новых поступающих',
+    'Время расчёта'
+  ];
+}
+
+
 function applicantProfileHeaders_() {
   return [
     'Код поступающего',
@@ -6045,6 +6099,11 @@ function ensureSchemas_(ss) {
     CFG.sheets.applicationsStaging,
     true
   );
+  const applicationStatistics = getOrCreateAnalysisSheet_(
+    ss,
+    CFG.sheets.applicationStatistics,
+    true
+  );
 
   ensureHeaders_(registry, [
     'Приоритет',
@@ -6161,6 +6220,26 @@ function ensureSchemas_(ss) {
     applicants,
     applicantProfileHeaders_()
   );
+
+  ensureHeaders_(
+    applicationStatistics,
+    applicationStatisticsHeaders_()
+  );
+
+  if (
+    applicationStatistics.getLastRow() < 2 &&
+    allApplications.getLastRow() > 1
+  ) {
+    const baseline = readApplicationIdentityIndex_(
+      allApplications
+    );
+
+    writeApplicationStatistics_(
+      ss,
+      baseline,
+      baseline
+    );
+  }
 
   if (plan) {
     ensureHeaders_(plan, [
@@ -6539,6 +6618,288 @@ function findSnapshotByHash_(
   return items.find(function (item) {
     return item.hash === hash;
   }) || null;
+}
+
+
+function refreshApplicationStatistics_(
+  ss,
+  stagingSheet,
+  replaceAll
+) {
+  const liveSheet = ss.getSheetByName(
+    CFG.sheets.allApplications
+  );
+
+  const previous = readApplicationIdentityIndex_(
+    liveSheet
+  );
+
+  const staged = readApplicationIdentityIndex_(
+    stagingSheet
+  );
+
+  const current = replaceAll
+    ? staged
+    : mergeApplicationIdentityIndexes_(
+      previous,
+      staged
+    );
+
+  writeApplicationStatistics_(
+    ss,
+    previous,
+    current
+  );
+}
+
+
+function writeApplicationStatistics_(
+  ss,
+  previous,
+  current
+) {
+  const rows = buildApplicationStatisticsRows_(
+    previous,
+    current
+  );
+
+  const sheet = ss.getSheetByName(
+    CFG.sheets.applicationStatistics
+  );
+
+  writeObjectsToSheet_(
+    sheet,
+    applicationStatisticsHeaders_(),
+    rows,
+    false
+  );
+
+  try {
+    CacheService.getScriptCache().remove(
+      'changes:all'
+    );
+  } catch (error) {
+    // Кэш не должен мешать завершению сборки.
+  }
+}
+
+
+function readApplicationIdentityIndex_(sheet) {
+  const result = {
+    pairs: {},
+    codes: {}
+  };
+
+  if (!sheet || sheet.getLastRow() < 2) {
+    return result;
+  }
+
+  const header = headers_(sheet).map;
+  const codeColumn = header['Код поступающего'];
+  const groupColumn = header['ID группы'];
+  const universityColumn = header['Вуз'];
+  const basisColumn = header['Основа'];
+
+  if (
+    codeColumn === undefined ||
+    groupColumn === undefined ||
+    universityColumn === undefined ||
+    basisColumn === undefined
+  ) {
+    return result;
+  }
+
+  const width = Math.max(
+    codeColumn,
+    groupColumn,
+    universityColumn,
+    basisColumn
+  ) + 1;
+
+  const rows = sheet
+    .getRange(
+      2,
+      1,
+      sheet.getLastRow() - 1,
+      width
+    )
+    .getValues();
+
+  rows.forEach(function (row) {
+    const code = String(
+      row[codeColumn] || ''
+    ).trim();
+
+    const groupId = String(
+      row[groupColumn] || ''
+    ).trim();
+
+    if (!code || !groupId) {
+      return;
+    }
+
+    const key = code + '|' + groupId;
+
+    result.pairs[key] = {
+      code: code,
+      groupId: groupId,
+      university: String(
+        row[universityColumn] || ''
+      ).trim(),
+      basis: String(
+        row[basisColumn] || ''
+      ).trim()
+    };
+
+    result.codes[code] = true;
+  });
+
+  return result;
+}
+
+
+function mergeApplicationIdentityIndexes_(
+  previous,
+  staged
+) {
+  const stagedGroups = {};
+
+  Object.keys(staged.pairs).forEach(function (key) {
+    stagedGroups[staged.pairs[key].groupId] = true;
+  });
+
+  const pairs = {};
+  const codes = {};
+
+  Object.keys(previous.pairs).forEach(function (key) {
+    const record = previous.pairs[key];
+
+    if (!stagedGroups[record.groupId]) {
+      pairs[key] = record;
+      codes[record.code] = true;
+    }
+  });
+
+  Object.keys(staged.pairs).forEach(function (key) {
+    const record = staged.pairs[key];
+
+    pairs[key] = record;
+    codes[record.code] = true;
+  });
+
+  return {
+    pairs: pairs,
+    codes: codes
+  };
+}
+
+
+function buildApplicationStatisticsRows_(
+  previous,
+  current
+) {
+  const scopes = {};
+
+  Object.keys(current.pairs).forEach(function (key) {
+    const record = current.pairs[key];
+    const isNewApplication = !previous.pairs[key];
+    const isNewApplicant = !previous.codes[record.code];
+
+    applicationStatisticScopeKeys_(record)
+      .forEach(function (scope) {
+        const item = scopes[scope.key] || {
+          scopeKey: scope.key,
+          university: scope.university,
+          basis: scope.basis,
+          totalApplications: 0,
+          applicants: {},
+          newApplications: 0,
+          applicantsWithNewApplications: {},
+          newApplicants: {}
+        };
+
+        item.totalApplications++;
+        item.applicants[record.code] = true;
+
+        if (isNewApplication) {
+          item.newApplications++;
+          item.applicantsWithNewApplications[
+            record.code
+          ] = true;
+
+          if (isNewApplicant) {
+            item.newApplicants[record.code] = true;
+          }
+        }
+
+        scopes[scope.key] = item;
+      });
+  });
+
+  const calculatedAt = formatDateTime_(new Date());
+
+  return Object.keys(scopes)
+    .sort()
+    .map(function (key) {
+      const item = scopes[key];
+
+      return {
+        'Ключ среза': item.scopeKey,
+        'Вуз': item.university,
+        'Основа': item.basis,
+        'Всего заявлений': item.totalApplications,
+        'Уникальных поступающих': Object.keys(
+          item.applicants
+        ).length,
+        'Новых заявлений': item.newApplications,
+        'Поступающих с новыми заявлениями': Object.keys(
+          item.applicantsWithNewApplications
+        ).length,
+        'Новых поступающих': Object.keys(
+          item.newApplicants
+        ).length,
+        'Время расчёта': calculatedAt
+      };
+    });
+}
+
+
+function applicationStatisticScopeKeys_(record) {
+  const result = [{
+    key: 'all',
+    university: '',
+    basis: ''
+  }];
+
+  if (record.university) {
+    result.push({
+      key: 'university|' + record.university,
+      university: record.university,
+      basis: ''
+    });
+  }
+
+  if (record.basis) {
+    result.push({
+      key: 'basis|' + record.basis,
+      university: '',
+      basis: record.basis
+    });
+  }
+
+  if (record.university && record.basis) {
+    result.push({
+      key:
+        'universityBasis|' +
+        record.university +
+        '|' +
+        record.basis,
+      university: record.university,
+      basis: record.basis
+    });
+  }
+
+  return result;
 }
 
 
@@ -7159,7 +7520,8 @@ function buildChangesPayload_(params) {
       university: university,
       basis: basis
     },
-    items: []
+    items: [],
+    summaries: buildApplicationStatisticsApiPayload_(ss)
   };
 
   if (!sheet || sheet.getLastRow() < 2) {
@@ -7230,6 +7592,59 @@ function buildChangesPayload_(params) {
 }
 
 
+function buildApplicationStatisticsApiPayload_(ss) {
+  const sheet = ss.getSheetByName(
+    CFG.sheets.applicationStatistics
+  );
+
+  if (!sheet || sheet.getLastRow() < 2) {
+    return [];
+  }
+
+  const header = headers_(sheet).map;
+  const rows = sheet.getDataRange().getValues();
+
+  return rows.slice(1).map(function (row) {
+    return {
+      scopeKey: String(
+        valueFromRow_(row, header, 'Ключ среза', '')
+      ),
+      university: String(
+        valueFromRow_(row, header, 'Вуз', '')
+      ),
+      basis: String(
+        valueFromRow_(row, header, 'Основа', '')
+      ),
+      totalApplications: apiNumber_(
+        valueFromRow_(row, header, 'Всего заявлений', null)
+      ),
+      totalApplicants: apiNumber_(
+        valueFromRow_(row, header, 'Уникальных поступающих', null)
+      ),
+      newApplications: apiNumber_(
+        valueFromRow_(row, header, 'Новых заявлений', null)
+      ),
+      applicantsWithNewApplications: apiNumber_(
+        valueFromRow_(
+          row,
+          header,
+          'Поступающих с новыми заявлениями',
+          null
+        )
+      ),
+      newApplicants: apiNumber_(
+        valueFromRow_(row, header, 'Новых поступающих', null)
+      ),
+      calculatedAt: displayDateValue_(
+        valueFromRow_(row, header, 'Время расчёта', '')
+      )
+    };
+  }).filter(function (item) {
+    return Boolean(item.scopeKey);
+  });
+}
+
+
 function changeRowToApiItem_(
   row,
   header
@@ -7269,6 +7684,13 @@ function changeRowToApiItem_(
     ),
     applicantPriorityPrevious: apiNumber_(
       value('Приоритет Елисея предыдущий', null)
+    ),
+
+    totalApplications: apiNumber_(
+      value('Количество участников в текущем снимке', null)
+    ),
+    previousTotalApplications: apiNumber_(
+      value('Количество участников в предыдущем снимке', null)
     ),
 
     newApplications: apiNumber_(

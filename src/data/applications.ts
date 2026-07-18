@@ -65,6 +65,8 @@ export interface ListChangeItem {
   previousSnapshot: string;
   applicantPriorityCurrent: number | null;
   applicantPriorityPrevious: number | null;
+  totalApplications: number | null;
+  previousTotalApplications: number | null;
   newApplications: number | null;
   newApplicationsHigherPriority: number | null;
   leftApplications: number | null;
@@ -89,6 +91,19 @@ export interface ChangesData {
     basis: string;
   };
   items: ListChangeItem[];
+  summaries: ApplicationStatisticsSummary[];
+}
+
+export interface ApplicationStatisticsSummary {
+  scopeKey: string;
+  university: string;
+  basis: string;
+  totalApplications: number | null;
+  totalApplicants: number | null;
+  newApplications: number | null;
+  applicantsWithNewApplications: number | null;
+  newApplicants: number | null;
+  calculatedAt: string;
 }
 
 export type ChangesFilters = {
@@ -274,6 +289,8 @@ type ApiChangeItem = {
   previousSnapshot?: string;
   applicantPriorityCurrent?: ApiNumber;
   applicantPriorityPrevious?: ApiNumber;
+  totalApplications?: ApiNumber;
+  previousTotalApplications?: ApiNumber;
   newApplications?: ApiNumber;
   newApplicationsHigherPriority?: ApiNumber;
   leftApplications?: ApiNumber;
@@ -298,6 +315,17 @@ type ApiChangesPayload = {
     basis?: string;
   };
   items: ApiChangeItem[];
+  summaries?: Array<{
+    scopeKey?: string;
+    university?: string;
+    basis?: string;
+    totalApplications?: ApiNumber;
+    totalApplicants?: ApiNumber;
+    newApplications?: ApiNumber;
+    applicantsWithNewApplications?: ApiNumber;
+    newApplicants?: ApiNumber;
+    calculatedAt?: string;
+  }>;
 };
 
 type ApiApplicantsPayload = {
@@ -445,6 +473,8 @@ function mapChangeItem(item: ApiChangeItem): ListChangeItem {
     previousSnapshot: item.previousSnapshot || "",
     applicantPriorityCurrent: toNullableNumber(item.applicantPriorityCurrent),
     applicantPriorityPrevious: toNullableNumber(item.applicantPriorityPrevious),
+    totalApplications: toNullableNumber(item.totalApplications),
+    previousTotalApplications: toNullableNumber(item.previousTotalApplications),
     newApplications: toNullableNumber(item.newApplications),
     newApplicationsHigherPriority: toNullableNumber(item.newApplicationsHigherPriority),
     leftApplications: toNullableNumber(item.leftApplications),
@@ -520,6 +550,17 @@ export async function getChanges(filters: ChangesFilters = {}): Promise<ChangesD
       basis: payload.filters?.basis || "",
     },
     items: payload.items.map(mapChangeItem),
+    summaries: (payload.summaries || []).map((item) => ({
+      scopeKey: item.scopeKey || "",
+      university: item.university || "",
+      basis: item.basis || "",
+      totalApplications: toNullableNumber(item.totalApplications),
+      totalApplicants: toNullableNumber(item.totalApplicants),
+      newApplications: toNullableNumber(item.newApplications),
+      applicantsWithNewApplications: toNullableNumber(item.applicantsWithNewApplications),
+      newApplicants: toNullableNumber(item.newApplicants),
+      calculatedAt: item.calculatedAt || "",
+    })),
   };
 }
 
