@@ -115,6 +115,14 @@ const Changes = () => {
     return true;
   }), [latestItems, universityFilter, basisFilter]);
 
+  const aggregateStats = useMemo(() => ({
+    totalApplications: sumAvailable(filteredItems, (item) => item.totalApplications),
+    newApplications: sumAvailable(
+      filteredItems.filter(hasComparison),
+      (item) => item.newApplications
+    ),
+  }), [filteredItems]);
+
   const selectedHistory = useMemo(
     () => sortChangesDesc(history).slice(0, HISTORY_LIMIT),
     [history]
@@ -228,6 +236,24 @@ const Changes = () => {
           </div>
         </Card>
 
+        {!selectedId && (
+          <section className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
+            <AggregateMetricCard
+              label="Всего заявлений"
+              metric={aggregateStats.totalApplications}
+              totalGroups={filteredItems.length}
+              note="в последних снимках выбранных групп"
+            />
+            <AggregateMetricCard
+              label="Новых заявлений"
+              metric={aggregateStats.newApplications}
+              totalGroups={filteredItems.length}
+              note="относительно предыдущих снимков"
+              accent
+            />
+          </section>
+        )}
+
         {selectedId && selected && (
           <>
             <section>
@@ -326,6 +352,49 @@ const Changes = () => {
     </div>
   );
 };
+
+type AggregateMetric = {
+  value: number | null;
+  availableGroups: number;
+};
+
+function sumAvailable(items: ListChangeItem[], select: (item: ListChangeItem) => number | null): AggregateMetric {
+  const values = items
+    .map(select)
+    .filter((value): value is number => value !== null);
+
+  return {
+    value: values.length ? values.reduce((sum, value) => sum + value, 0) : null,
+    availableGroups: values.length,
+  };
+}
+
+function AggregateMetricCard({
+  label,
+  metric,
+  totalGroups,
+  note,
+  accent = false,
+}: {
+  label: string;
+  metric: AggregateMetric;
+  totalGroups: number;
+  note: string;
+  accent?: boolean;
+}) {
+  return (
+    <Card className={`p-5 shadow-card ${accent ? "border-primary/40" : ""}`}>
+      <div className="text-xs uppercase tracking-wider text-muted-foreground">{label}</div>
+      <div className={`mt-1 text-3xl font-semibold tabular-nums ${accent ? "text-primary" : ""}`}>
+        {metric.value === null ? "—" : metric.value.toLocaleString("ru-RU")}
+      </div>
+      <div className="mt-1 text-sm text-muted-foreground">{note}</div>
+      <div className="mt-2 text-xs text-muted-foreground">
+        Данные: {metric.availableGroups} из {totalGroups} групп
+      </div>
+    </Card>
+  );
+}
 
 function SnapshotTotalCard({ value }: { value: number | null }) {
   return (
