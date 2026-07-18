@@ -7271,6 +7271,13 @@ function changeRowToApiItem_(
       value('Приоритет Елисея предыдущий', null)
     ),
 
+    totalApplications: apiNumber_(
+      value('Количество участников в текущем снимке', null)
+    ),
+    previousTotalApplications: apiNumber_(
+      value('Количество участников в предыдущем снимке', null)
+    ),
+
     newApplications: apiNumber_(
       value('Новых заявлений', null)
     ),

@@ -247,6 +247,7 @@ const Changes = () => {
             </section>
 
             <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 md:gap-4">
+              <SnapshotTotalCard value={selected.totalApplications} />
               <ChangeMetricCard label="Новые заявления" value={selected.newApplications} higher={selected.newApplicationsHigherPriority} tone="in" />
               <ChangeMetricCard label="Ушли заявления" value={selected.leftApplications} higher={selected.leftApplicationsHigherPriority} tone="out" />
               <ChangeMetricCard label="Новые согласия" value={selected.newConsents} higher={selected.newConsentsHigherPriority} tone="in" />
@@ -325,6 +326,18 @@ const Changes = () => {
     </div>
   );
 };
+
+function SnapshotTotalCard({ value }: { value: number | null }) {
+  return (
+    <Card className="p-4 shadow-card">
+      <div className="text-[11px] uppercase tracking-wider text-muted-foreground">Всего заявлений в снимке</div>
+      <div className="mt-1 text-2xl font-semibold tabular-nums">
+        {value === null ? "—" : value.toLocaleString("ru-RU")}
+      </div>
+      <div className="mt-1 text-xs text-muted-foreground">в текущем конкурсном списке</div>
+    </Card>
+  );
+}
 
 function ChangeMetricCard({ label, value, higher, tone }: { label: string; value: number | null; higher: number | null; tone: MetricTone }) {
   const isOut = tone === "out";
@@ -406,11 +419,12 @@ function RiskBlock({ item }: { item: ListChangeItem }) {
 function ChangesHistoryTable({ items }: { items: ListChangeItem[] }) {
   return (
     <div className="overflow-x-auto -mx-5 md:mx-0">
-      <table className="w-full min-w-[1600px] text-sm">
+      <table className="w-full min-w-[1700px] text-sm">
         <thead>
           <tr className="text-left text-xs uppercase tracking-wider text-muted-foreground border-b">
             <th className="py-3 px-3">Текущий снимок</th>
             <th className="py-3 px-3">Предыдущий снимок</th>
+            <th className="py-3 px-3 text-center">Всего заявлений</th>
             <th className="py-3 px-3 text-center">Новые заявления</th>
             <th className="py-3 px-3 text-center">Из них приоритет выше</th>
             <th className="py-3 px-3 text-center">Ушли заявления</th>
@@ -437,6 +451,7 @@ function ChangesHistoryTable({ items }: { items: ListChangeItem[] }) {
               >
                 <td className="py-3 px-3 tabular-nums">{item.currentSnapshot}</td>
                 <td className="py-3 px-3 tabular-nums">{hasComparison(item) ? item.previousSnapshot : "Первый снимок"}</td>
+                <td className="py-3 px-3 text-center tabular-nums">{item.totalApplications === null ? "—" : item.totalApplications.toLocaleString("ru-RU")}</td>
                 <td className="py-3 px-3 text-center tabular-nums">{formatSigned(item.newApplications, "in")}</td>
                 <td className="py-3 px-3 text-center tabular-nums">{formatHigherPriority(item.newApplicationsHigherPriority, "in")}</td>
                 <td className="py-3 px-3 text-center tabular-nums">{formatSigned(item.leftApplications, "out")}</td>
@@ -458,7 +473,7 @@ function ChangesHistoryTable({ items }: { items: ListChangeItem[] }) {
               </tr>
             );
           })}
-          {!items.length && <tr><td colSpan={15} className="py-8 text-center text-muted-foreground">История изменений пока не рассчитана.</td></tr>}
+          {!items.length && <tr><td colSpan={16} className="py-8 text-center text-muted-foreground">История изменений пока не рассчитана.</td></tr>}
         </tbody>
       </table>
     </div>
@@ -468,7 +483,7 @@ function ChangesHistoryTable({ items }: { items: ListChangeItem[] }) {
 function SummaryTable({ items, onSelect }: { items: ListChangeItem[]; onSelect: (id: string) => void }) {
   return (
     <div className="overflow-x-auto -mx-5 md:mx-0">
-      <table className="w-full min-w-[1250px] text-sm">
+      <table className="w-full min-w-[1350px] text-sm">
         <thead>
           <tr className="text-left text-xs uppercase tracking-wider text-muted-foreground border-b">
             <th className="py-3 px-3">Вуз</th>
@@ -476,6 +491,7 @@ function SummaryTable({ items, onSelect }: { items: ListChangeItem[]; onSelect: 
             <th className="py-3 px-3">Специальность</th>
             <th className="py-3 px-3">Текущий снимок</th>
             <th className="py-3 px-3">Предыдущий снимок</th>
+            <th className="py-3 px-3 text-center">Всего заявлений</th>
             <th className="py-3 px-3 text-center">Новые заявления</th>
             <th className="py-3 px-3 text-center">Из них приоритет выше</th>
             <th className="py-3 px-3 text-center">Новые согласия</th>
@@ -513,6 +529,7 @@ function SummaryTable({ items, onSelect }: { items: ListChangeItem[]; onSelect: 
                 </td>
                 <td className="py-3 px-3 tabular-nums">{item.currentSnapshot}</td>
                 <td className="py-3 px-3 tabular-nums">{hasComparison(item) ? item.previousSnapshot : "Первый снимок"}</td>
+                <td className="py-3 px-3 text-center tabular-nums">{item.totalApplications === null ? "—" : item.totalApplications.toLocaleString("ru-RU")}</td>
                 <td className="py-3 px-3 text-center tabular-nums">{formatSigned(item.newApplications, "in")}</td>
                 <td className="py-3 px-3 text-center tabular-nums">{formatHigherPriority(item.newApplicationsHigherPriority, "in")}</td>
                 <td className="py-3 px-3 text-center tabular-nums">{formatSigned(item.newConsents, "in")}</td>
@@ -522,7 +539,7 @@ function SummaryTable({ items, onSelect }: { items: ListChangeItem[]; onSelect: 
               </tr>
             );
           })}
-          {!items.length && <tr><td colSpan={11} className="py-8 text-center text-muted-foreground">Изменения пока не рассчитаны.</td></tr>}
+          {!items.length && <tr><td colSpan={12} className="py-8 text-center text-muted-foreground">Изменения пока не рассчитаны.</td></tr>}
         </tbody>
       </table>
     </div>

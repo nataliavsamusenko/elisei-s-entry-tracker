@@ -65,6 +65,8 @@ export interface ListChangeItem {
   previousSnapshot: string;
   applicantPriorityCurrent: number | null;
   applicantPriorityPrevious: number | null;
+  totalApplications: number | null;
+  previousTotalApplications: number | null;
   newApplications: number | null;
   newApplicationsHigherPriority: number | null;
   leftApplications: number | null;
@@ -274,6 +276,8 @@ type ApiChangeItem = {
   previousSnapshot?: string;
   applicantPriorityCurrent?: ApiNumber;
   applicantPriorityPrevious?: ApiNumber;
+  totalApplications?: ApiNumber;
+  previousTotalApplications?: ApiNumber;
   newApplications?: ApiNumber;
   newApplicationsHigherPriority?: ApiNumber;
   leftApplications?: ApiNumber;
@@ -445,6 +449,8 @@ function mapChangeItem(item: ApiChangeItem): ListChangeItem {
     previousSnapshot: item.previousSnapshot || "",
     applicantPriorityCurrent: toNullableNumber(item.applicantPriorityCurrent),
     applicantPriorityPrevious: toNullableNumber(item.applicantPriorityPrevious),
+    totalApplications: toNullableNumber(item.totalApplications),
+    previousTotalApplications: toNullableNumber(item.previousTotalApplications),
     newApplications: toNullableNumber(item.newApplications),
     newApplicationsHigherPriority: toNullableNumber(item.newApplicationsHigherPriority),
     leftApplications: toNullableNumber(item.leftApplications),
