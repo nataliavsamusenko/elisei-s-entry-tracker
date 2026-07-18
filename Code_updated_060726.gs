@@ -449,8 +449,20 @@ function processCsvFiles_(ss, mode) {
         hash
       );
 
+      const snapshotByFileId = findSnapshotByFileId_(
+        snapshotIndex,
+        file.getId()
+      );
+
+      const remappedSnapshot =
+        snapshotByFileId &&
+        snapshotByFileId.groupId !== group.id
+          ? snapshotByFileId
+          : null;
+
       if (
         mode === 'incremental' &&
+        !remappedSnapshot &&
         (known[dedupeKey] || existingSnapshot)
       ) {
         if (existingSnapshot && !journalKnown[dedupeKey]) {
@@ -570,12 +582,21 @@ function processCsvFiles_(ss, mode) {
         hash
       );
 
-      if (existingSnapshot) {
+      const snapshotToUpdate =
+        existingSnapshot || remappedSnapshot;
+
+      if (snapshotToUpdate) {
         updateRowByHeaders_(
           snapshotsSheet,
-          existingSnapshot.rowNumber,
+          snapshotToUpdate.rowNumber,
           values
         );
+
+        if (remappedSnapshot) {
+          snapshotIndex = buildSnapshotIndex_(
+            snapshotsSheet
+          );
+        }
 
         result.updated++;
       } else {
@@ -592,7 +613,7 @@ function processCsvFiles_(ss, mode) {
           file,
           hash,
           item.path,
-          existingSnapshot
+          snapshotToUpdate
             ? 'Обновлён существующий снимок'
             : 'Обработан'
         ));
@@ -609,8 +630,10 @@ function processCsvFiles_(ss, mode) {
           key: dedupeKey,
           path: item.path,
           extracted: 'Да',
-          added: 'Да',
-          mode: 'Новый или изменённый CSV',
+          added: remappedSnapshot ? 'Нет' : 'Да',
+          mode: remappedSnapshot
+            ? 'Исправлено сопоставление CSV'
+            : 'Новый или изменённый CSV',
           comment:
             'Согласий: ' +
             valueOrText_(
@@ -5879,19 +5902,28 @@ function findGroup_(registry, context, fileName) {
 
   const aliases = FILE_ALIASES[context.key] || [];
 
+  let matchedGroupId = '';
+  let matchedPhraseLength = 0;
+
   for (let i = 0; i < aliases.length; i++) {
     const groupId = aliases[i][0];
     const phrases = aliases[i][1];
 
     for (let j = 0; j < phrases.length; j++) {
+      const phrase = normalize_(phrases[j]);
+
       if (
-        fileText.indexOf(
-          normalize_(phrases[j])
-        ) !== -1
+        fileText.indexOf(phrase) !== -1 &&
+        phrase.length > matchedPhraseLength
       ) {
-        return registry.byId[groupId] || null;
+        matchedGroupId = groupId;
+        matchedPhraseLength = phrase.length;
       }
     }
+  }
+
+  if (matchedGroupId) {
+    return registry.byId[matchedGroupId] || null;
   }
 
   const candidates = registry.records.filter(function (record) {
@@ -6447,8 +6479,11 @@ function buildSnapshotIndex_(sheet) {
 
   const groupIndex = header.map['ID группы'];
   const hashIndex = header.map['Хеш содержимого'];
+  const fileIndex = header.map['ID файла Drive'];
 
-  const result = {};
+  const result = {
+    byFileId: {}
+  };
 
   if (
     groupIndex === undefined ||
@@ -6474,10 +6509,20 @@ function buildSnapshotIndex_(sheet) {
       result[groupId] = [];
     }
 
-    result[groupId].push({
+    const item = {
       rowNumber: i + 1,
-      hash: hash
-    });
+      groupId: groupId,
+      hash: hash,
+      fileId: fileIndex === undefined
+        ? ''
+        : String(data[i][fileIndex] || '').trim()
+    };
+
+    result[groupId].push(item);
+
+    if (item.fileId) {
+      result.byFileId[item.fileId] = item;
+    }
   }
 
   return result;
@@ -6494,6 +6539,17 @@ function findSnapshotByHash_(
   return items.find(function (item) {
     return item.hash === hash;
   }) || null;
+}
+
+
+function findSnapshotByFileId_(
+  snapshotIndex,
+  fileId
+) {
+  return (
+    snapshotIndex.byFileId &&
+    snapshotIndex.byFileId[fileId]
+  ) || null;
 }
 
 
