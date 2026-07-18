@@ -182,7 +182,7 @@ const Index = () => {
             </div>
 
             <div className="overflow-x-auto -mx-4 md:mx-0">
-              <table className="w-full text-sm min-w-[1250px]">
+              <table className="w-full text-sm min-w-[1380px]">
                 <thead>
                   <tr className="text-left text-xs uppercase tracking-wider text-muted-foreground border-b">
                     <th className="py-3 px-3">Вуз · основа</th>
@@ -190,8 +190,9 @@ const Index = () => {
                     <th className="py-3 px-3 text-center">Приор.</th>
                     <th className="py-3 px-3 text-center">Балл</th>
                     <th className="py-3 px-3 text-center">Общая поз.</th>
+                    <th className="py-3 px-3 text-center">Активная поз.</th>
                     <th className="py-3 px-3">Движение</th>
-                    <th className="py-3 px-3">Квота / активность</th>
+                    <th className="py-3 px-3">Квота / подтверждения</th>
                     <th className="py-3 px-3">Стоимость</th>
                     <th className="py-3 px-3">Статус</th>
                   </tr>
@@ -202,6 +203,12 @@ const Index = () => {
                     const activity = app.basis === "Бюджет"
                       ? `Согласия: ${formatKnown(control.consentsCount)}`
                       : `Договоры: ${formatKnown(control.contractsCount)}`;
+                    const activeRank = app.basis === "Бюджет"
+                      ? control.consentRank
+                      : control.contractRank;
+                    const activeSource = activeRank === null
+                      ? (app.basis === "Бюджет" ? "нет согласия" : "нет договора")
+                      : (app.basis === "Бюджет" ? "по согласиям" : "по договорам");
                     return (
                       <tr key={app.id} className="border-b last:border-b-0 hover:bg-secondary/50 transition-colors align-top">
                         <td className="py-3 px-3"><div className="font-medium">{app.university}</div><BasisBadge basis={app.basis} /></td>
@@ -209,14 +216,20 @@ const Index = () => {
                         <td className="py-3 px-3 text-center tabular-nums">{app.priority}</td>
                         <td className="py-3 px-3 text-center font-semibold tabular-nums">{app.score}</td>
                         <td className="py-3 px-3 text-center"><span className="inline-flex items-center justify-center min-w-[44px] px-2 py-1 rounded-md bg-secondary font-semibold tabular-nums">{app.position}</span></td>
-                        <td className="py-3 px-3 text-xs"><MovementText value={app.generalChange} /><div className="text-muted-foreground mt-1">активная: {app.activeChange}</div></td>
+                        <td className="py-3 px-3 text-center text-xs">
+                          {activeRank === null
+                            ? <span className="text-muted-foreground">—</span>
+                            : <span className="inline-flex items-center justify-center min-w-[44px] px-2 py-1 rounded-md bg-primary/10 text-primary font-semibold tabular-nums">{activeRank}</span>}
+                          <div className="text-muted-foreground mt-1 whitespace-nowrap">{activeSource}</div>
+                        </td>
+                        <td className="py-3 px-3 text-xs"><MovementText value={app.generalChange} /><div className="text-muted-foreground mt-1">изменение активной: {app.activeChange}</div></td>
                         <td className="py-3 px-3 text-xs"><div>Мест: {control.seats ?? "не сопоставлено"}</div><div className="text-muted-foreground mt-1">{activity}</div></td>
                         <td className="py-3 px-3 text-xs text-muted-foreground">{app.basis === "Платное" ? (control.semesterFeeText ?? "Стоимость уточняется") : "—"}</td>
                         <td className="py-3 px-3"><DecisionBadge kind={decision.kind} label={decision.label} /><div className="text-[11px] text-muted-foreground mt-1">{decision.detail}</div></td>
                       </tr>
                     );
                   })}
-                  {filtered.length === 0 && <tr><td colSpan={9} className="py-8 text-center text-muted-foreground">Ничего не найдено</td></tr>}
+                  {filtered.length === 0 && <tr><td colSpan={10} className="py-8 text-center text-muted-foreground">Ничего не найдено</td></tr>}
                 </tbody>
               </table>
             </div>
