@@ -3695,6 +3695,12 @@ function buildLatestApplicantSources_(ss) {
 
   const latest = {};
 
+  addLatestApplicantSourcesFromSnapshots_(
+    ss.getSheetByName(CFG.sheets.snapshots),
+    registry,
+    latest
+  );
+
   getAllCsvFiles_().forEach(function (item) {
     const context = getFolderContext_(item.pathNames);
 
@@ -3718,21 +3724,21 @@ function buildLatestApplicantSources_(ss) {
     );
 
     const existing = latest[group.id];
+    const updatedAt = item.file.getLastUpdated().getTime();
 
     if (
       !existing ||
       sortDate > existing.sortDate ||
       (
         sortDate === existing.sortDate &&
-        item.file.getLastUpdated().getTime() >
-        existing.updatedAt
+        updatedAt > existing.updatedAt
       )
     ) {
       latest[group.id] = {
         groupId: group.id,
         fileId: item.file.getId(),
         sortDate: sortDate,
-        updatedAt: item.file.getLastUpdated().getTime()
+        updatedAt: updatedAt
       };
     }
   });
@@ -3745,6 +3751,69 @@ function buildLatestApplicantSources_(ss) {
         fileId: latest[groupId].fileId
       };
     });
+}
+
+
+function addLatestApplicantSourcesFromSnapshots_(
+  sheet,
+  registry,
+  latest
+) {
+  if (!sheet || sheet.getLastRow() < 2) {
+    return;
+  }
+
+  const header = headers_(sheet).map;
+  const groupColumn = header['ID группы'];
+  const dateColumn = header['Дата и время списка'];
+  const fileColumn = header['ID файла Drive'];
+
+  if (
+    groupColumn === undefined ||
+    dateColumn === undefined ||
+    fileColumn === undefined
+  ) {
+    return;
+  }
+
+  const rows = sheet.getDataRange().getValues();
+
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i];
+    const groupId = String(row[groupColumn] || '').trim();
+    const fileId = String(row[fileColumn] || '').trim();
+
+    if (
+      !groupId ||
+      !fileId ||
+      !registry.byId[groupId]
+    ) {
+      continue;
+    }
+
+    const sortDate = snapshotSortDate_(
+      row[dateColumn],
+      i + 1
+    );
+
+    const existing = latest[groupId];
+
+    if (
+      !existing ||
+      sortDate > existing.sortDate ||
+      (
+        sortDate === existing.sortDate &&
+        i + 1 > existing.updatedAt
+      )
+    ) {
+      latest[groupId] = {
+        groupId: groupId,
+        fileId: fileId,
+        sortDate: sortDate,
+        updatedAt: i + 1
+      };
+    }
+  }
 }
 
 
