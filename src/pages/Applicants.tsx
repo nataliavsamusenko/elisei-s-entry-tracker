@@ -1,6 +1,6 @@
 import { FormEvent, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight, RotateCcw, Search } from "lucide-react";
+import { ChevronLeft, ChevronRight, LoaderCircle, RotateCcw, Search } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -193,10 +193,18 @@ const Applicants = () => {
             />
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button type="submit">Применить фильтры</Button>
+            <Button type="submit" disabled={query.isFetching}>
+              {query.isFetching && <LoaderCircle className="w-4 h-4 mr-2 animate-spin" />}
+              {query.isFetching ? "Применяем…" : "Применить фильтры"}
+            </Button>
             <Button type="button" variant="outline" onClick={resetFilters}>
               <RotateCcw className="w-4 h-4 mr-2" /> Сбросить
             </Button>
+            {query.isFetching && !query.isLoading && (
+              <span className="self-center text-sm text-muted-foreground" role="status">
+                Обновляем список по выбранным условиям…
+              </span>
+            )}
           </div>
         </form>
 
