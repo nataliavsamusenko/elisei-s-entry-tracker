@@ -4586,6 +4586,30 @@ function rebuildApplicantProfiles_(ss) {
 function buildApplicantsPayload_(params) {
   params = params || {};
 
+  const cache = CacheService.getScriptCache();
+  const cacheKey = 'applicants:' + makeHash_(
+    JSON.stringify({
+      university: params.university || '',
+      basis: params.basis || '',
+      confirmation: params.confirmation || '',
+      direction: params.direction || '',
+      priority: params.priority || '',
+      query: params.query || '',
+      offset: params.offset || '',
+      limit: params.limit || ''
+    })
+  );
+
+  const cached = cache.get(cacheKey);
+
+  if (cached) {
+    try {
+      return JSON.parse(cached);
+    } catch (error) {
+      // Повреждённый кэш не должен мешать чтению листов.
+    }
+  }
+
   const ss = SpreadsheetApp.openById(
     CFG.spreadsheetId
   );
@@ -4630,6 +4654,26 @@ function buildApplicantsPayload_(params) {
   const exactCode = normalizeParticipantId_(
     params.query || ''
   );
+
+  const matchingApplicantCodes =
+    hasApplicationFilters_(
+      university,
+      basis,
+      confirmation,
+      direction,
+      priority
+    )
+      ? findMatchingApplicantCodes_(
+        ss,
+        {
+          university: university,
+          basis: basis,
+          confirmation: confirmation,
+          direction: direction,
+          priority: priority
+        }
+      )
+      : null;
 
   const payload = {
     generatedAt: new Date().toISOString(),
@@ -4789,50 +4833,8 @@ function buildApplicantsPayload_(params) {
     }
 
     if (
-      university &&
-      universityItems.indexOf(university) === -1
-    ) {
-      continue;
-    }
-
-    if (
-      direction &&
-      normalize_(directions).indexOf(direction) === -1
-    ) {
-      continue;
-    }
-
-    if (
-      priority !== null &&
-      directions.split('\n').every(function (item) {
-        return item.indexOf(
-          ' · приоритет ' + priority
-        ) === -1;
-      })
-    ) {
-      continue;
-    }
-
-    if (basis === 'Бюджет' && budgetCount === 0) {
-      continue;
-    }
-
-    if (basis === 'Платное' && paidCount === 0) {
-      continue;
-    }
-
-    if (confirmation === 'consent' && consents === 0) {
-      continue;
-    }
-
-    if (confirmation === 'contract' && contracts === 0) {
-      continue;
-    }
-
-    if (
-      confirmation === 'any' &&
-      consents === 0 &&
-      contracts === 0
+      matchingApplicantCodes &&
+      !matchingApplicantCodes[code]
     ) {
       continue;
     }
@@ -4881,7 +4883,171 @@ function buildApplicantsPayload_(params) {
   payload.total = items.length;
   payload.items = items.slice(offset, offset + limit);
 
+  try {
+    cache.put(cacheKey, JSON.stringify(payload), 300);
+  } catch (error) {
+    // Слишком большой ответ просто останется без кэша.
+  }
+
   return payload;
+}
+
+
+function hasApplicationFilters_(
+  university,
+  basis,
+  confirmation,
+  direction,
+  priority
+) {
+  return Boolean(
+    university ||
+    basis ||
+    confirmation ||
+    direction ||
+    priority !== null
+  );
+}
+
+
+/**
+ * Возвращает коды, у которых одна и та же заявка соответствует
+ * всей комбинации фильтров. Это исключает ложные совпадения,
+ * когда вуз, основа и подтверждение относятся к разным заявкам.
+ */
+function findMatchingApplicantCodes_(ss, filters) {
+  const cache = CacheService.getScriptCache();
+  const cacheKey = 'applicant-codes:' + makeHash_(
+    JSON.stringify(filters)
+  );
+
+  const cached = cache.get(cacheKey);
+
+  if (cached) {
+    try {
+      return JSON.parse(cached);
+    } catch (error) {
+      // Продолжаем и пересобираем индекс ниже.
+    }
+  }
+
+  const sheet = ss.getSheetByName(
+    CFG.sheets.allApplications
+  );
+
+  const result = {};
+
+  if (!sheet || sheet.getLastRow() < 2) {
+    return result;
+  }
+
+  const header = headers_(sheet).map;
+  const rowCount = sheet.getLastRow() - 1;
+  const names = [
+    'Код поступающего',
+    'Вуз',
+    'Основа',
+    'Конкурсная группа',
+    'Приоритет',
+    'Согласие подано',
+    'Договор заключён'
+  ];
+
+  if (names.some(function (name) {
+    return header[name] === undefined;
+  })) {
+    return result;
+  }
+
+  const columns = {};
+
+  names.forEach(function (name) {
+    columns[name] = sheet
+      .getRange(2, header[name] + 1, rowCount, 1)
+      .getValues();
+  });
+
+  for (let i = 0; i < rowCount; i++) {
+    const code = String(
+      columns['Код поступающего'][i][0] || ''
+    ).trim();
+
+    if (!code) {
+      continue;
+    }
+
+    if (
+      filters.university &&
+      String(columns['Вуз'][i][0] || '').trim() !==
+      filters.university
+    ) {
+      continue;
+    }
+
+    if (
+      filters.basis &&
+      String(columns['Основа'][i][0] || '').trim() !==
+      filters.basis
+    ) {
+      continue;
+    }
+
+    if (
+      filters.direction &&
+      normalize_(columns['Конкурсная группа'][i][0])
+        .indexOf(filters.direction) === -1
+    ) {
+      continue;
+    }
+
+    if (
+      filters.priority !== null &&
+      apiNumber_(columns['Приоритет'][i][0]) !==
+      filters.priority
+    ) {
+      continue;
+    }
+
+    const hasConsent = normalize_(
+      columns['Согласие подано'][i][0]
+    ) === 'да';
+
+    const hasContract = normalize_(
+      columns['Договор заключён'][i][0]
+    ) === 'да';
+
+    if (
+      filters.confirmation === 'consent' &&
+      !hasConsent
+    ) {
+      continue;
+    }
+
+    if (
+      filters.confirmation === 'contract' &&
+      !hasContract
+    ) {
+      continue;
+    }
+
+    if (
+      filters.confirmation === 'any' &&
+      !hasConsent &&
+      !hasContract
+    ) {
+      continue;
+    }
+
+    result[code] = true;
+  }
+
+  try {
+    cache.put(cacheKey, JSON.stringify(result), 300);
+  } catch (error) {
+    // Широкий фильтр может не поместиться в кэш.
+  }
+
+  return result;
 }
 
 
