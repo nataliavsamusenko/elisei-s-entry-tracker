@@ -192,6 +192,65 @@ export interface ApplicantProfileData {
   applications: ApplicantApplication[];
 }
 
+export type CompetitionView = "active" | "higherOrEqual" | "priority1" | "all";
+
+export interface CompetitionGroupSummary {
+  groupId: string;
+  university: string;
+  basis: Basis;
+  groupName: string;
+  candidatePriority: number | null;
+  scenarioPriority: number | null;
+  candidateScore: number | null;
+  candidatePosition: number | null;
+  candidateConfirmed: boolean;
+  seats: number | null;
+  snapshot: string;
+  aheadTotal: number;
+  aheadHigherScore: number;
+  activeAhead: number;
+  priorityOneActiveAhead: number;
+  higherPriorityActiveAhead: number;
+  samePriorityActiveAhead: number;
+  lowerPriorityActiveAhead: number;
+  unknownPriorityActiveAhead: number;
+  projectedActiveRank: number | null;
+  gapToSeats: number | null;
+  withinSeats: boolean | null;
+}
+
+export interface CompetitorItem {
+  applicantCode: string;
+  generalPosition: number | null;
+  score: number | null;
+  scoreDelta: number | null;
+  priority: number | null;
+  status: string;
+  confirmed: boolean;
+  confirmationLabel: string;
+}
+
+export interface CompetitorsData {
+  generatedAt: string;
+  candidateId: string;
+  selectedGroupId: string;
+  scenarioPriority: number | null;
+  groups: CompetitionGroupSummary[];
+  detail: CompetitionGroupSummary | null;
+  total: number;
+  offset: number;
+  limit: number;
+  items: CompetitorItem[];
+}
+
+export type CompetitorsFilters = {
+  groupId?: string;
+  scenarioPriority?: number;
+  view?: CompetitionView;
+  offset?: number;
+  limit?: number;
+};
+
 export interface CoverageEntry {
   university: string;
   received: number;
@@ -346,6 +405,24 @@ type ApiApplicantProfilePayload = {
   applications?: Array<Partial<ApplicantApplication> & { basis?: string }>;
 };
 
+type ApiCompetitionGroupSummary = Partial<CompetitionGroupSummary> & {
+  groupId?: string;
+  basis?: string;
+};
+
+type ApiCompetitorsPayload = {
+  generatedAt?: string;
+  candidateId?: string;
+  selectedGroupId?: string;
+  scenarioPriority?: ApiNumber;
+  groups?: ApiCompetitionGroupSummary[];
+  detail?: ApiCompetitionGroupSummary | null;
+  total?: ApiNumber;
+  offset?: ApiNumber;
+  limit?: ApiNumber;
+  items?: Array<Partial<CompetitorItem>>;
+};
+
 const DEFAULT_GAS_ENDPOINT = [
   "https://script.google.com/macros/s/",
   "AKfycbz3f91C_J50XFzmtSDx-TT7qhNb_1V88BYexp82B6upiyJB1L7iLXprvVAIrkPYNgZxqg",
@@ -489,6 +566,33 @@ function mapChangeItem(item: ApiChangeItem): ListChangeItem {
     leftContractsWithApplicationHigherPriority: toNullableNumber(item.leftContractsWithApplicationHigherPriority),
     comment: item.comment || "",
     calculatedAt: item.calculatedAt || "",
+  };
+}
+
+function mapCompetitionSummary(item: ApiCompetitionGroupSummary): CompetitionGroupSummary {
+  return {
+    groupId: String(item.groupId || ""),
+    university: String(item.university || ""),
+    basis: toBasis(String(item.basis || "")),
+    groupName: String(item.groupName || "Без названия группы"),
+    candidatePriority: toNullableNumber(item.candidatePriority),
+    scenarioPriority: toNullableNumber(item.scenarioPriority),
+    candidateScore: toNullableNumber(item.candidateScore),
+    candidatePosition: toNullableNumber(item.candidatePosition),
+    candidateConfirmed: Boolean(item.candidateConfirmed),
+    seats: toNullableNumber(item.seats),
+    snapshot: String(item.snapshot || "Нет даты списка"),
+    aheadTotal: toNullableNumber(item.aheadTotal) ?? 0,
+    aheadHigherScore: toNullableNumber(item.aheadHigherScore) ?? 0,
+    activeAhead: toNullableNumber(item.activeAhead) ?? 0,
+    priorityOneActiveAhead: toNullableNumber(item.priorityOneActiveAhead) ?? 0,
+    higherPriorityActiveAhead: toNullableNumber(item.higherPriorityActiveAhead) ?? 0,
+    samePriorityActiveAhead: toNullableNumber(item.samePriorityActiveAhead) ?? 0,
+    lowerPriorityActiveAhead: toNullableNumber(item.lowerPriorityActiveAhead) ?? 0,
+    unknownPriorityActiveAhead: toNullableNumber(item.unknownPriorityActiveAhead) ?? 0,
+    projectedActiveRank: toNullableNumber(item.projectedActiveRank),
+    gapToSeats: toNullableNumber(item.gapToSeats),
+    withinSeats: typeof item.withinSeats === "boolean" ? item.withinSeats : null,
   };
 }
 
@@ -659,6 +763,43 @@ export async function getApplicantProfile(params: {
       contractRank: toNullableNumber(item.contractRank),
       seats: toNullableNumber(item.seats),
       snapshot: String(item.snapshot || "Нет даты списка"),
+    })),
+  };
+}
+
+export async function getCompetitors(filters: CompetitorsFilters = {}): Promise<CompetitorsData> {
+  const payload = await requestJson<ApiCompetitorsPayload>(endpointUrl({
+    action: "competitors",
+    groupId: filters.groupId,
+    scenarioPriority: filters.scenarioPriority ? String(filters.scenarioPriority) : undefined,
+    view: filters.view,
+    offset: String(filters.offset ?? 0),
+    limit: String(filters.limit ?? 100),
+  }));
+
+  if (!payload || !Array.isArray(payload.groups) || !Array.isArray(payload.items)) {
+    throw new Error("API не вернул анализ конкурентов.");
+  }
+
+  return {
+    generatedAt: String(payload.generatedAt || ""),
+    candidateId: String(payload.candidateId || ""),
+    selectedGroupId: String(payload.selectedGroupId || ""),
+    scenarioPriority: toNullableNumber(payload.scenarioPriority),
+    groups: payload.groups.map(mapCompetitionSummary),
+    detail: payload.detail ? mapCompetitionSummary(payload.detail) : null,
+    total: toNullableNumber(payload.total) ?? 0,
+    offset: toNullableNumber(payload.offset) ?? 0,
+    limit: toNullableNumber(payload.limit) ?? (filters.limit ?? 100),
+    items: payload.items.map((item) => ({
+      applicantCode: String(item.applicantCode || ""),
+      generalPosition: toNullableNumber(item.generalPosition),
+      score: toNullableNumber(item.score),
+      scoreDelta: toNullableNumber(item.scoreDelta),
+      priority: toNullableNumber(item.priority),
+      status: String(item.status || "Нет данных"),
+      confirmed: Boolean(item.confirmed),
+      confirmationLabel: String(item.confirmationLabel || ""),
     })),
   };
 }
