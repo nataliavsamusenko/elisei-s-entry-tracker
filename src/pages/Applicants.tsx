@@ -117,6 +117,7 @@ const Applicants = () => {
             </div>
             <nav className="flex flex-col items-start md:items-end gap-1 text-sm">
               <Link to="/" className="underline underline-offset-4 opacity-90 hover:opacity-100">На главную</Link>
+              <Link to="/competitors" className="underline underline-offset-4 opacity-90 hover:opacity-100">Анализ конкурентов</Link>
               <Link to="/confirmations" className="underline underline-offset-4 opacity-90 hover:opacity-100">Подтверждения Елисея</Link>
             </nav>
           </div>

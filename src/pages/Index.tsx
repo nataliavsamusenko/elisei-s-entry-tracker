@@ -114,7 +114,8 @@ const Index = () => {
             <div className="flex flex-col items-start md:items-end gap-3">
               <Badge className="bg-warning text-warning-foreground hover:bg-warning border-0 text-sm px-3 py-1">{formatDashboardStage(meta.stage)}</Badge>
               <div className="flex flex-col items-start md:items-end gap-1">
-                <Link to="/applicants" className="text-sm underline underline-offset-4 opacity-90 hover:opacity-100">Карта поступающих</Link>
+                <Link to="/competitors" className="text-sm underline underline-offset-4 opacity-90 hover:opacity-100">Анализ конкурентов</Link>
+                <Link to="/applicants" className="text-sm underline underline-offset-4 opacity-90 hover:opacity-100">Карта всех поступающих</Link>
                 <Link to="/changes" className="text-sm underline underline-offset-4 opacity-90 hover:opacity-100">Изменения списков</Link>
                 <Link to="/dynamics" className="text-sm underline underline-offset-4 opacity-90 hover:opacity-100">Полная динамика позиций</Link>
               </div>

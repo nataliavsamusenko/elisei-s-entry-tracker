@@ -9,6 +9,7 @@ import Changes from "./pages/Changes.tsx";
 import Confirmations from "./pages/Confirmations.tsx";
 import Applicants from "./pages/Applicants.tsx";
 import ApplicantProfile from "./pages/ApplicantProfile.tsx";
+import Competitors from "./pages/Competitors.tsx";
 import NotFound from "./pages/NotFound.tsx";
 
 
@@ -27,6 +28,7 @@ const App = () => (
           <Route path="/confirmations" element={<Confirmations />} />
           <Route path="/applicants" element={<Applicants />} />
           <Route path="/applicants/:profileKey" element={<ApplicantProfile />} />
+          <Route path="/competitors" element={<Competitors />} />
 
           <Route path="*" element={<NotFound />} />
         </Routes>

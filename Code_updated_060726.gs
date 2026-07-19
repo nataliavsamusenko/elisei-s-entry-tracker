@@ -249,6 +249,9 @@ function testApi() {
  *
  * /exec?action=applicant&applicantId=1234567
  *   Точный поиск карточки по коду поступающего.
+ *
+ * /exec?action=competitors&groupId=SPBGEU-B-01
+ *   Анализ поступающих, которые находятся выше Елисея в выбранной группе.
  */
 function doGet(e) {
   const params =
@@ -275,6 +278,8 @@ function doGet(e) {
     payload = buildApplicantsPayload_(params);
   } else if (action === 'applicant') {
     payload = buildApplicantProfilePayload_(params);
+  } else if (action === 'competitors') {
+    payload = buildCompetitorsPayload_(params);
   } else if (groupId) {
     payload = buildFastGroupHistoryPayload_(groupId);
   } else {
@@ -4580,6 +4585,452 @@ function rebuildApplicantProfiles_(ss) {
     rows,
     true
   );
+}
+
+
+/**
+ * Считает конкурентов Елисея по актуальному листу «Все заявления».
+ * Общая позиция определяет, кто находится выше; балл используется
+ * как дополнительный аналитический признак.
+ */
+function buildCompetitorsPayload_(params) {
+  params = params || {};
+
+  const groupId = String(params.groupId || '').trim();
+  const view = String(params.view || 'active').trim();
+  const offset = Math.max(
+    0,
+    Math.floor(numberOrNull_(params.offset) || 0)
+  );
+  const limit = Math.max(
+    1,
+    Math.min(
+      200,
+      Math.floor(numberOrNull_(params.limit) || 100)
+    )
+  );
+  const requestedPriority = apiNumber_(
+    params.scenarioPriority || ''
+  );
+
+  const cache = CacheService.getScriptCache();
+  const cacheKey = 'competitors:' + makeHash_(
+    JSON.stringify({
+      groupId: groupId,
+      view: view,
+      offset: offset,
+      limit: limit,
+      scenarioPriority: requestedPriority
+    })
+  );
+  const cached = cache.get(cacheKey);
+
+  if (cached) {
+    try {
+      return JSON.parse(cached);
+    } catch (error) {
+      // Повреждённый кэш не должен мешать расчету.
+    }
+  }
+
+  const payload = {
+    generatedAt: new Date().toISOString(),
+    candidateId: CFG.applicantId,
+    selectedGroupId: groupId,
+    scenarioPriority: requestedPriority,
+    groups: [],
+    detail: null,
+    total: 0,
+    offset: offset,
+    limit: limit,
+    items: []
+  };
+
+  const ss = SpreadsheetApp.openById(CFG.spreadsheetId);
+  const sheet = ss.getSheetByName(CFG.sheets.allApplications);
+
+  if (!sheet || sheet.getLastRow() < 2) {
+    return payload;
+  }
+
+  const columns = readApplicationAnalysisColumns_(sheet);
+
+  if (!columns) {
+    return payload;
+  }
+
+  const rowCount = columns['Код поступающего'].length;
+  const candidates = {};
+
+  for (let i = 0; i < rowCount; i++) {
+    if (!isApplicantId_(columns['Код поступающего'][i][0])) {
+      continue;
+    }
+
+    const candidateGroupId = String(
+      columns['ID группы'][i][0] || ''
+    ).trim();
+
+    if (!candidateGroupId) {
+      continue;
+    }
+
+    candidates[candidateGroupId] = competitionRowFromColumns_(
+      columns,
+      i
+    );
+  }
+
+  const summaries = {};
+
+  Object.keys(candidates).forEach(function (candidateGroupId) {
+    summaries[candidateGroupId] = makeCompetitionSummary_(
+      candidates[candidateGroupId],
+      candidates[candidateGroupId].priority
+    );
+  });
+
+  const selectedCandidate = groupId
+    ? candidates[groupId] || null
+    : null;
+  const selectedScenarioPriority = requestedPriority !== null
+    ? requestedPriority
+    : selectedCandidate
+      ? selectedCandidate.priority
+      : null;
+  const detailItems = [];
+
+  for (let i = 0; i < rowCount; i++) {
+    const currentGroupId = String(
+      columns['ID группы'][i][0] || ''
+    ).trim();
+    const candidate = candidates[currentGroupId];
+
+    if (!candidate) {
+      continue;
+    }
+
+    const code = String(
+      columns['Код поступающего'][i][0] || ''
+    ).trim();
+
+    if (!code || isApplicantId_(code)) {
+      continue;
+    }
+
+    const competitor = competitionRowFromColumns_(columns, i);
+
+    if (
+      competitor.generalPosition === null ||
+      candidate.generalPosition === null ||
+      competitor.generalPosition >= candidate.generalPosition
+    ) {
+      continue;
+    }
+
+    addCompetitorToSummary_(
+      summaries[currentGroupId],
+      competitor
+    );
+
+    if (selectedCandidate && currentGroupId === groupId) {
+      competitor.applicantCode = maskApplicantCode_(code);
+      competitor.scoreDelta =
+        competitor.score !== null && selectedCandidate.score !== null
+          ? competitor.score - selectedCandidate.score
+          : null;
+      competitor.confirmed = isCompetitionRowActive_(competitor);
+      competitor.confirmationLabel = competitor.basis === 'Бюджет'
+        ? competitor.hasConsent
+          ? 'Согласие подано'
+          : 'Без согласия'
+        : competitor.hasContract
+          ? 'Договор заключён'
+          : 'Без договора';
+
+      if (
+        competitorMatchesCompetitionView_(
+          competitor,
+          view,
+          selectedScenarioPriority
+        )
+      ) {
+        detailItems.push(competitor);
+      }
+    }
+  }
+
+  Object.keys(summaries).forEach(function (candidateGroupId) {
+    finalizeCompetitionSummary_(summaries[candidateGroupId]);
+  });
+
+  payload.groups = Object.keys(summaries)
+    .map(function (candidateGroupId) {
+      return summaries[candidateGroupId];
+    })
+    .sort(compareCompetitionSummaries_);
+
+  if (selectedCandidate) {
+    const detail = makeCompetitionSummary_(
+      selectedCandidate,
+      selectedScenarioPriority
+    );
+
+    for (let i = 0; i < rowCount; i++) {
+      const currentGroupId = String(
+        columns['ID группы'][i][0] || ''
+      ).trim();
+
+      if (currentGroupId !== groupId) {
+        continue;
+      }
+
+      const code = String(
+        columns['Код поступающего'][i][0] || ''
+      ).trim();
+
+      if (!code || isApplicantId_(code)) {
+        continue;
+      }
+
+      const competitor = competitionRowFromColumns_(columns, i);
+
+      if (
+        competitor.generalPosition !== null &&
+        selectedCandidate.generalPosition !== null &&
+        competitor.generalPosition < selectedCandidate.generalPosition
+      ) {
+        addCompetitorToSummary_(detail, competitor);
+      }
+    }
+
+    finalizeCompetitionSummary_(detail);
+    payload.detail = detail;
+    payload.scenarioPriority = selectedScenarioPriority;
+  }
+
+  detailItems.sort(function (first, second) {
+    return Number(second.confirmed) - Number(first.confirmed) ||
+      (first.priority === null ? 999 : first.priority) -
+        (second.priority === null ? 999 : second.priority) ||
+      (first.generalPosition || 999999) -
+        (second.generalPosition || 999999);
+  });
+
+  payload.total = detailItems.length;
+  payload.items = detailItems
+    .slice(offset, offset + limit)
+    .map(function (item) {
+      return {
+        applicantCode: item.applicantCode,
+        generalPosition: item.generalPosition,
+        score: item.score,
+        scoreDelta: item.scoreDelta,
+        priority: item.priority,
+        status: item.status,
+        confirmed: item.confirmed,
+        confirmationLabel: item.confirmationLabel
+      };
+    });
+
+  try {
+    cache.put(cacheKey, JSON.stringify(payload), 300);
+  } catch (error) {
+    // Большой ответ может не поместиться в кэш.
+  }
+
+  return payload;
+}
+
+
+function readApplicationAnalysisColumns_(sheet) {
+  const header = headers_(sheet).map;
+  const rowCount = sheet.getLastRow() - 1;
+  const names = [
+    'Код поступающего',
+    'ID группы',
+    'Вуз',
+    'Основа',
+    'Конкурсная группа',
+    'Приоритет',
+    'Балл',
+    'Общая позиция',
+    'Статус',
+    'Согласие подано',
+    'Договор заключён',
+    'Мест',
+    'Дата списка'
+  ];
+
+  if (names.some(function (name) {
+    return header[name] === undefined;
+  })) {
+    return null;
+  }
+
+  const columns = {};
+
+  names.forEach(function (name) {
+    columns[name] = sheet
+      .getRange(2, header[name] + 1, rowCount, 1)
+      .getValues();
+  });
+
+  return columns;
+}
+
+
+function competitionRowFromColumns_(columns, index) {
+  const basis = String(columns['Основа'][index][0] || '').trim();
+
+  return {
+    groupId: String(columns['ID группы'][index][0] || '').trim(),
+    university: String(columns['Вуз'][index][0] || '').trim(),
+    basis: basis,
+    groupName: String(
+      columns['Конкурсная группа'][index][0] || ''
+    ).trim(),
+    priority: apiNumber_(columns['Приоритет'][index][0]),
+    score: apiNumber_(columns['Балл'][index][0]),
+    generalPosition: apiNumber_(
+      columns['Общая позиция'][index][0]
+    ),
+    status: String(columns['Статус'][index][0] || '').trim(),
+    hasConsent: normalize_(
+      columns['Согласие подано'][index][0]
+    ) === 'да',
+    hasContract: normalize_(
+      columns['Договор заключён'][index][0]
+    ) === 'да',
+    seats: apiNumber_(columns['Мест'][index][0]),
+    snapshot: displayDateValue_(
+      columns['Дата списка'][index][0]
+    )
+  };
+}
+
+
+function makeCompetitionSummary_(candidate, scenarioPriority) {
+  return {
+    groupId: candidate.groupId,
+    university: candidate.university,
+    basis: candidate.basis,
+    groupName: candidate.groupName,
+    candidatePriority: candidate.priority,
+    scenarioPriority: scenarioPriority,
+    candidateScore: candidate.score,
+    candidatePosition: candidate.generalPosition,
+    candidateConfirmed: isCompetitionRowActive_(candidate),
+    seats: candidate.seats,
+    snapshot: candidate.snapshot,
+    aheadTotal: 0,
+    aheadHigherScore: 0,
+    activeAhead: 0,
+    priorityOneActiveAhead: 0,
+    higherPriorityActiveAhead: 0,
+    samePriorityActiveAhead: 0,
+    lowerPriorityActiveAhead: 0,
+    unknownPriorityActiveAhead: 0,
+    projectedActiveRank: null,
+    gapToSeats: null,
+    withinSeats: null
+  };
+}
+
+
+function addCompetitorToSummary_(summary, competitor) {
+  summary.aheadTotal++;
+
+  if (
+    competitor.score !== null &&
+    summary.candidateScore !== null &&
+    competitor.score > summary.candidateScore
+  ) {
+    summary.aheadHigherScore++;
+  }
+
+  if (!isCompetitionRowActive_(competitor)) {
+    return;
+  }
+
+  summary.activeAhead++;
+
+  if (competitor.priority === 1) {
+    summary.priorityOneActiveAhead++;
+  }
+
+  if (
+    competitor.priority === null ||
+    summary.scenarioPriority === null
+  ) {
+    summary.unknownPriorityActiveAhead++;
+  } else if (competitor.priority < summary.scenarioPriority) {
+    summary.higherPriorityActiveAhead++;
+  } else if (competitor.priority === summary.scenarioPriority) {
+    summary.samePriorityActiveAhead++;
+  } else {
+    summary.lowerPriorityActiveAhead++;
+  }
+}
+
+
+function finalizeCompetitionSummary_(summary) {
+  summary.projectedActiveRank = summary.activeAhead + 1;
+
+  if (summary.seats === null) {
+    return;
+  }
+
+  summary.gapToSeats = summary.projectedActiveRank - summary.seats;
+  summary.withinSeats = summary.projectedActiveRank <= summary.seats;
+}
+
+
+function isCompetitionRowActive_(item) {
+  return item.basis === 'Бюджет'
+    ? item.hasConsent
+    : item.hasContract;
+}
+
+
+function competitorMatchesCompetitionView_(
+  competitor,
+  view,
+  scenarioPriority
+) {
+  const active = isCompetitionRowActive_(competitor);
+
+  if (view === 'all') {
+    return true;
+  }
+
+  if (view === 'priority1') {
+    return active && competitor.priority === 1;
+  }
+
+  if (view === 'higherOrEqual') {
+    return active &&
+      competitor.priority !== null &&
+      scenarioPriority !== null &&
+      competitor.priority <= scenarioPriority;
+  }
+
+  return active;
+}
+
+
+function compareCompetitionSummaries_(first, second) {
+  const firstGap = first.gapToSeats === null
+    ? 999999
+    : first.gapToSeats;
+  const secondGap = second.gapToSeats === null
+    ? 999999
+    : second.gapToSeats;
+
+  return firstGap - secondGap ||
+    first.activeAhead - second.activeAhead ||
+    first.university.localeCompare(second.university) ||
+    first.groupName.localeCompare(second.groupName);
 }
 
 
